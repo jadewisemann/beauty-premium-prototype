@@ -3,6 +3,7 @@ import {
   applyMat3,
   createCurrentToReferenceTransform,
   createSourceToDisplayTransform,
+  predictSimilarityTransform,
   invertMat3,
   multiplyMat3,
   rotateSourceUv,
@@ -69,5 +70,22 @@ describe('source coordinate transforms', () => {
     const currentToFace = [2, 0, -1.4, 0, 2, -1, 0, 0, 1] as const;
     const currentFaceCenter = { x: 0.7, y: 0.5 };
     expectPoint(applyMat3(createCurrentToReferenceTransform(currentToFace, referenceToFace), currentFaceCenter), { x: 0.5, y: 0.5 });
+  });
+
+  it('briefly extrapolates similarity motion and caps the lead', () => {
+    const previous = invertMat3([0.8, 0, 0.4, 0, 0.8, 0.5, 0, 0, 1]);
+    const current = invertMat3([1, 0, 0.5, 0, 1, 0.5, 0, 0, 1]);
+    const halfStepPose = invertMat3(predictSimilarityTransform(previous, current, 0, 100, 150, 80));
+    expectPoint(applyMat3(halfStepPose, { x: 0, y: 0 }), { x: 0.55, y: 0.5 });
+    expectPoint(applyMat3(halfStepPose, { x: 1, y: 0 }), { x: 1.65, y: 0.5 });
+    const leadCapPose = invertMat3(predictSimilarityTransform(previous, current, 0, 100, 500, 25));
+    expectPoint(applyMat3(leadCapPose, { x: 0, y: 0 }), { x: 0.525, y: 0.5 });
+    const sampleCapPose = invertMat3(predictSimilarityTransform(previous, current, 0, 100, 500, 200));
+    expectPoint(applyMat3(sampleCapPose, { x: 0, y: 0 }), { x: 0.6, y: 0.5 });
+    expectPoint(applyMat3(sampleCapPose, { x: 1, y: 0 }), { x: 1.8, y: 0.5 });
+    expect(predictSimilarityTransform(previous, current, 0, 100, 99, 80)).toBe(current);
+    expect(predictSimilarityTransform(previous, current, Number.NaN, 100, 150, 80)).toBe(current);
+    const discontinuity = invertMat3([1, 0, 0.8, 0, 1, 0.5, 0, 0, 1]);
+    expect(predictSimilarityTransform(previous, discontinuity, 0, 100, 150, 80)).toBe(discontinuity);
   });
 });

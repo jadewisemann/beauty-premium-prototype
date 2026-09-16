@@ -74,6 +74,47 @@ export function createCurrentToReferenceTransform(currentSourceToFace: Mat3, ref
   return multiplyMat3(invertMat3(referenceSourceToFace), currentSourceToFace);
 }
 
+/** Briefly advances a similarity transform at its latest measured velocity. */
+export function predictSimilarityTransform(
+  previous: Mat3,
+  current: Mat3,
+  previousMs: number,
+  currentMs: number,
+  targetMs: number,
+  maxLeadMs: number,
+): Mat3 {
+  const sampleMs = currentMs - previousMs;
+  if (![previousMs, currentMs, targetMs, maxLeadMs].every(Number.isFinite)
+    || sampleMs <= 0 || targetMs <= currentMs || maxLeadMs <= 0) return current;
+  try {
+    const previousPose = invertMat3(previous);
+    const currentPose = invertMat3(current);
+    const previousScale = Math.hypot(previousPose[0], previousPose[3]);
+    const currentScale = Math.hypot(currentPose[0], currentPose[3]);
+    const scaleRatio = currentScale / previousScale;
+    const rotationDelta = Math.atan2(
+      Math.sin(Math.atan2(currentPose[3], currentPose[0]) - Math.atan2(previousPose[3], previousPose[0])),
+      Math.cos(Math.atan2(currentPose[3], currentPose[0]) - Math.atan2(previousPose[3], previousPose[0])),
+    );
+    if (!Number.isFinite(scaleRatio) || scaleRatio < 0.7 || scaleRatio > 1.4
+      || Math.hypot(currentPose[2] - previousPose[2], currentPose[5] - previousPose[5]) > 0.2
+      || Math.abs(rotationDelta) > Math.PI / 4) return current;
+    const factor = Math.min(targetMs - currentMs, maxLeadMs, sampleMs) / sampleMs;
+    const predictedPose: Mat3 = [
+      currentPose[0] + (currentPose[0] - previousPose[0]) * factor,
+      currentPose[1] + (currentPose[1] - previousPose[1]) * factor,
+      currentPose[2] + (currentPose[2] - previousPose[2]) * factor,
+      currentPose[3] + (currentPose[3] - previousPose[3]) * factor,
+      currentPose[4] + (currentPose[4] - previousPose[4]) * factor,
+      currentPose[5] + (currentPose[5] - previousPose[5]) * factor,
+      currentPose[6], currentPose[7], currentPose[8],
+    ];
+    return invertMat3(predictedPose);
+  } catch {
+    return current;
+  }
+}
+
 /** UV rotation used only while normalising an input before it becomes source S. */
 export function rotateSourceUv(clockwiseDegrees: 0 | 90 | 180 | 270): Mat3 {
   switch (clockwiseDegrees) {

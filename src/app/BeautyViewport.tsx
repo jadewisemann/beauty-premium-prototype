@@ -2,10 +2,11 @@ import { forwardRef, useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import { initialEngineConfig } from '../engine/config';
 import type { BeautyController } from '../engine/controller';
-import type { LookRecipe } from '../engine/contracts';
+import type { FaceSnapshot, LookRecipe } from '../engine/contracts';
 import { blushEllipses, drawEyeMakeupMask, drawLipMask } from '../engine/masks';
 import { BeautyRenderer, type RenderView, type RendererMetrics } from '../engine/renderer';
 import { freshnessAtAge } from '../engine/temporal';
+import { predictSimilarityTransform } from '../engine/transforms';
 
 interface Props {
   controller: BeautyController;
@@ -51,7 +52,10 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
     let resizedPhotoSize = '';
     let resizePending = '';
     let lastHair: unknown = null;
-    let lastFace: unknown = null;
+    let lastFace: FaceSnapshot | null = null;
+    let trackedFace: FaceSnapshot | null = null;
+    let previousTrackedFace: FaceSnapshot | null = null;
+    let trackingGeneration = -1;
     let lastBlushSize: number | string = Number.NaN;
     let blush: ReturnType<typeof rendererBlush> | null = null;
     let lastMetricsAt = 0;
@@ -70,9 +74,17 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
         lastPhoto = null;
         lastHair = null;
         lastFace = null;
+        trackedFace = null;
+        previousTrackedFace = null;
+        trackingGeneration = -1;
         lastBlushSize = Number.NaN;
       }
       const snapshot = controller.getSnapshot();
+      if (snapshot.generation !== trackingGeneration) {
+        trackedFace = null;
+        previousTrackedFace = null;
+        trackingGeneration = snapshot.generation;
+      }
       const video = videoRef.current;
       const source = snapshot.sourceKind === 'photo' ? snapshot.photoBitmap : video;
       const width = snapshot.sourceKind === 'photo' ? snapshot.photoBitmap?.width : video?.videoWidth;
@@ -140,6 +152,8 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
         }
         if (lastFace !== snapshot.face) {
           if (snapshot.face) {
+            previousTrackedFace = trackedFace?.frame.generation === snapshot.face.frame.generation ? trackedFace : null;
+            trackedFace = snapshot.face;
             const mask = createLipMask(snapshot.face.landmarks);
             renderer.uploadLipMask(mask, mask.width, mask.height);
             const eyeMask = createEyeMask(snapshot.face.landmarks);
@@ -159,8 +173,30 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
         }
         const now = performance.now();
         const faceAge = snapshot.face ? now - snapshot.face.frame.acquiredMs : Number.POSITIVE_INFINITY;
+        const trackedFaceAge = trackedFace ? now - trackedFace.frame.acquiredMs : Number.POSITIVE_INFINITY;
         const hairAge = snapshot.hair ? now - snapshot.hair.frame.acquiredMs : Number.POSITIVE_INFINITY;
         const photo = snapshot.sourceKind === 'photo';
+        const faceFreshness = photo
+          ? (snapshot.face ? 1 : 0)
+          : freshnessAtAge(faceAge, initialEngineConfig.faceFadeStartMs, initialEngineConfig.faceExpireMs);
+        const trackingFreshness = photo
+          ? (trackedFace ? 1 : 0)
+          : freshnessAtAge(trackedFaceAge, initialEngineConfig.faceFadeStartMs, initialEngineConfig.faceExpireMs);
+        const currentFacePose = trackedFace && Number.isFinite(trackedFace.fitResidual)
+          ? (!photo
+              && previousTrackedFace
+              && previousTrackedFace.frame.generation === trackedFace.frame.generation
+              && Number.isFinite(previousTrackedFace.fitResidual)
+            ? predictSimilarityTransform(
+                previousTrackedFace.sourceToFace,
+                trackedFace.sourceToFace,
+                previousTrackedFace.frame.acquiredMs,
+                trackedFace.frame.acquiredMs,
+                now,
+                1000 / initialEngineConfig.faceMaxHz,
+              )
+            : trackedFace.sourceToFace)
+          : null;
         const overlayOnly = !photo;
         canvas.style.opacity = overlayOnly && propsRef.current.view === 'original' ? '0' : '1';
         const metrics = renderer.render({
@@ -168,9 +204,11 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
           mirror: snapshot.sourceKind === 'camera',
           overlayOnly,
           recipe: propsRef.current.recipe,
-          hairFreshness: photo ? (snapshot.hair ? 1 : 0) : freshnessAtAge(hairAge, initialEngineConfig.hairFadeStartMs, initialEngineConfig.hairExpireMs),
-          faceFreshness: photo ? (snapshot.face ? 1 : 0) : freshnessAtAge(faceAge, initialEngineConfig.faceFadeStartMs, initialEngineConfig.faceExpireMs),
-          currentFacePose: snapshot.face && Number.isFinite(snapshot.face.fitResidual) ? snapshot.face.sourceToFace : null,
+          hairFreshness: photo
+            ? (snapshot.hair ? 1 : 0)
+            : freshnessAtAge(hairAge, initialEngineConfig.hairFadeStartMs, initialEngineConfig.hairExpireMs) * trackingFreshness,
+          faceFreshness,
+          currentFacePose,
           hairPoseAtSource: snapshot.hair?.poseAtSource ?? null,
           blush,
           splitCompare: propsRef.current.splitCompare,
