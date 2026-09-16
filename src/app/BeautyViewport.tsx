@@ -14,6 +14,7 @@ interface Props {
   recipe: LookRecipe;
   view: RenderView;
   splitCompare?: boolean;
+  makeupEnabled?: boolean;
   resolutionScale?: number;
   onRendererError?: (message: string) => void;
   onRendererRecovered?: () => void;
@@ -26,14 +27,15 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
   recipe,
   view,
   splitCompare = false,
+  makeupEnabled = true,
   resolutionScale = 1,
   onRendererError,
   onRendererRecovered,
   onMetrics,
 }, forwardedRef) {
   const localCanvasRef = useRef<HTMLCanvasElement>(null);
-  const propsRef = useRef({ recipe, view, splitCompare, resolutionScale, onRendererError, onRendererRecovered, onMetrics });
-  propsRef.current = { recipe, view, splitCompare, resolutionScale, onRendererError, onRendererRecovered, onMetrics };
+  const propsRef = useRef({ recipe, view, splitCompare, makeupEnabled, resolutionScale, onRendererError, onRendererRecovered, onMetrics });
+  propsRef.current = { recipe, view, splitCompare, makeupEnabled, resolutionScale, onRendererError, onRendererRecovered, onMetrics };
 
   useEffect(() => {
     const canvas = localCanvasRef.current;
@@ -207,6 +209,7 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
           mirror: snapshot.sourceKind === 'camera',
           overlayOnly,
           recipe: propsRef.current.recipe,
+          makeupEnabled: propsRef.current.makeupEnabled,
           hairFreshness: photo
             ? (snapshot.hair ? 1 : 0)
             : freshnessAtAge(hairAge, initialEngineConfig.hairFadeStartMs, initialEngineConfig.hairExpireMs) * trackingFreshness,

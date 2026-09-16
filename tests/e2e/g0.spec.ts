@@ -42,6 +42,7 @@ test.describe('G0 runtime', () => {
   });
 
   test('runs the bounded live camera path with a browser fixture stream', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.addInitScript((faceDataUrl) => {
       Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
         configurable: true,
@@ -73,6 +74,7 @@ test.describe('G0 runtime', () => {
     if (await page.locator('.state-pill').innerText() === '오류') throw new Error(await page.getByRole('alert').innerText());
     await expect(page.locator('.source-video')).toHaveCSS('opacity', '1');
     await expect(page.locator('.source-video')).toHaveClass(/source-video-mirrored/);
+    await expect(page.locator('.stage-card')).toHaveCSS('position', 'sticky');
     const diagnostics = page.getByLabel('진단 정보');
     await expect.poll(async () => Number(await diagnostics.locator('div').filter({ hasText: '프레임 완료' }).locator('dd').innerText()), { timeout: 30_000 }).toBeGreaterThan(0);
     await expect(diagnostics.locator('div').filter({ hasText: '얼굴 점' }).locator('dd')).toHaveText(/\d+/, { timeout: 30_000 });
@@ -93,6 +95,8 @@ test.describe('G0 runtime', () => {
       return null;
     })).resolves.toEqual([[255, 0, 0, 255], [0, 0, 255, 255]]);
     await expect(page.getByRole('button', { name: '촬영' })).toBeEnabled();
+    await page.locator('.editor-card').scrollIntoViewIfNeeded();
+    await expect.poll(async () => Math.round((await page.locator('.stage-card').boundingBox())?.y ?? -1)).toBe(8);
     await page.getByRole('button', { name: '촬영' }).click();
     await expect(page.locator('.state-pill')).toHaveText(/^(사진|오류)$/, { timeout: 45_000 });
     if (await page.locator('.state-pill').innerText() === '오류') throw new Error(await page.getByRole('alert').innerText());

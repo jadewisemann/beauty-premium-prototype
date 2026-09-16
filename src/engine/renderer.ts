@@ -25,6 +25,7 @@ export interface RenderOptions {
   /** Live video is displayed by the browser; WebGL draws only the effect layer. */
   overlayOnly: boolean;
   recipe: LookRecipe;
+  makeupEnabled?: boolean;
   hairFreshness: number;
   faceFreshness: number;
   currentFacePose: Mat3 | null;
@@ -332,12 +333,13 @@ export class BeautyRenderer {
     uniform1f(gl, this.compositeProgram, 'uHighlightProtect', recipe.hair.highlightProtect);
     uniform1f(gl, this.compositeProgram, 'uEdgeStrength', recipe.hair.edgeStrength);
     uniform1f(gl, this.compositeProgram, 'uHairFreshness', options.hairFreshness);
-    uniform1f(gl, this.compositeProgram, 'uEyeShadowStrength', recipe.eye.enabled ? recipe.eye.shadowStrength : 0);
-    uniform1f(gl, this.compositeProgram, 'uEyeLinerStrength', recipe.eye.enabled ? recipe.eye.linerStrength : 0);
-    uniform1f(gl, this.compositeProgram, 'uLipStrength', recipe.lip.enabled ? recipe.lip.strength : 0);
+    const makeupEnabled = options.makeupEnabled !== false;
+    uniform1f(gl, this.compositeProgram, 'uEyeShadowStrength', makeupEnabled && recipe.eye.enabled ? recipe.eye.shadowStrength : 0);
+    uniform1f(gl, this.compositeProgram, 'uEyeLinerStrength', makeupEnabled && recipe.eye.enabled ? recipe.eye.linerStrength : 0);
+    uniform1f(gl, this.compositeProgram, 'uLipStrength', makeupEnabled && recipe.lip.enabled ? recipe.lip.strength : 0);
     uniform1i(gl, this.compositeProgram, 'uLipFinish', ['tint', 'satin', 'matte', 'gloss'].indexOf(recipe.lip.material));
     uniform1f(gl, this.compositeProgram, 'uFaceFreshness', options.faceFreshness);
-    uniform1f(gl, this.compositeProgram, 'uBlushStrength', recipe.blush.enabled ? recipe.blush.strength : 0);
+    uniform1f(gl, this.compositeProgram, 'uBlushStrength', makeupEnabled && recipe.blush.enabled ? recipe.blush.strength : 0);
     setEllipse(gl, this.compositeProgram, 'uBlushLeft', options.blush?.left ?? null);
     setEllipse(gl, this.compositeProgram, 'uBlushRight', options.blush?.right ?? null);
     setEllipse(gl, this.compositeProgram, 'uFaceEllipse', options.blush?.face ?? null);

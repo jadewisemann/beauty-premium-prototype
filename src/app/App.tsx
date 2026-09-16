@@ -18,6 +18,7 @@ import {
   updateSliderTransaction,
 } from './recipe-state';
 import { BeautyViewport } from './BeautyViewport';
+import { OpenMakeupViewport } from './OpenMakeupViewport';
 import './styles.css';
 
 const viewOptions: Array<{ id: RenderView; label: string }> = [
@@ -45,6 +46,7 @@ export function App() {
   const [savedUrl, setSavedUrl] = useState<string | null>(null);
   const [cameraConsentGiven, setCameraConsentGiven] = useState(false);
   const [cameraLaunchPending, setCameraLaunchPending] = useState(false);
+  const [openMakeupReady, setOpenMakeupReady] = useState(false);
   const [debugEnabled] = useState(() => new URLSearchParams(window.location.search).get('debug') === '1');
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -135,6 +137,7 @@ export function App() {
   };
 
   const displayedView: RenderView = originalHeld ? 'original' : view;
+  const openMakeupActive = isLive && (snapshot.sourceKind === 'camera' || snapshot.sourceKind === 'replay');
 
   return (
     <main className="app-shell">
@@ -143,7 +146,7 @@ export function App() {
         <span className={`state-pill state-${snapshot.state.toLowerCase()}`} role="status" aria-live="polite">{stateLabel(snapshot.state)}</span>
       </header>
 
-      <section className={`stage-card ${compare === 'grid' && snapshot.state === 'PHOTO' ? 'stage-grid' : ''}`}>
+      <section className={`stage-card ${compare === 'grid' && snapshot.state === 'PHOTO' ? 'stage-grid' : ''} ${openMakeupActive ? 'stage-open-makeup' : ''}`}>
         <video
           ref={videoRef}
           className={`source-video ${snapshot.sourceKind === 'camera' || snapshot.sourceKind === 'replay' ? 'source-video-visible' : ''} ${snapshot.sourceKind === 'camera' ? 'source-video-mirrored' : ''}`}
@@ -158,9 +161,21 @@ export function App() {
               <span>{shortLabel(look.label)}</span>
             </div>
           ))
-        ) : (
-          <BeautyViewport ref={canvasRef} controller={controller} videoRef={videoRef} recipe={recipe} view={displayedView} splitCompare={compare === 'split'} onRendererError={(message) => { setRendererError(message); controller.reportRendererError(message); }} onRendererRecovered={() => setRendererError(null)} onMetrics={updateMetrics} />
-        )}
+        ) : <>
+          {openMakeupActive && (
+            <OpenMakeupViewport
+              generation={snapshot.generation}
+              videoRef={videoRef}
+              recipe={recipe}
+              mirrored={snapshot.sourceKind === 'camera'}
+              visible={displayedView === 'final'}
+              splitCompare={compare === 'split'}
+              onReady={setOpenMakeupReady}
+              onError={(message) => { setOpenMakeupReady(false); setRendererError(`OpenMakeupSDK: ${message}`); }}
+            />
+          )}
+          <BeautyViewport ref={canvasRef} controller={controller} videoRef={videoRef} recipe={recipe} view={displayedView} splitCompare={compare === 'split'} makeupEnabled={!openMakeupReady} onRendererError={(message) => { setRendererError(message); controller.reportRendererError(message); }} onRendererRecovered={() => setRendererError(null)} onMetrics={updateMetrics} />
+        </>}
         {showEntryOverlay && (
           <div className="entry-overlay">
             <section className="entry-panel" role="dialog" aria-modal="true" aria-labelledby="entry-title">

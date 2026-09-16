@@ -1,6 +1,6 @@
 # BECON Beauty Playground
 
-사진과 전면 카메라에서 헤어 컬러·아이·립·블러셔를 로컬 합성하는 모바일 웹 프로토타입이다. React + TypeScript + Vite, MediaPipe Tasks Vision, 자체 WebGL2 렌더러로 구성되며 이미지·랜드마크·마스크는 기본 경로에서 서버로 보내지 않는다.
+사진과 전면 카메라에서 헤어 컬러·아이·립·블러셔를 로컬 합성하는 모바일 웹 프로토타입이다. React + TypeScript + Vite, MediaPipe Tasks Vision, OpenMakeupSDK와 자체 WebGL2 헤어 렌더러로 구성되며 이미지·랜드마크·마스크는 기본 경로에서 서버로 보내지 않는다.
 
 ## 실행
 
@@ -34,6 +34,8 @@ npm run test:e2e
 - 실제 raw hair confidence, 5×5 joint bilateral refined mask, 포즈 정렬 시간축 결합
 - 브라우저 video 원본과 투명 WebGL 효과 레이어 분리, 최신 얼굴 포즈 기반 hair mask 재투영
 - 선형 sRGB/OKLab 기반 헤어 재질, even-odd 립 마스크, 얼굴 영역 제한 블러셔
+- 라이브 립·아이·블러셔는 OpenMakeupSDK를 사용하며 face warp·morph·blur·wireframe은 비활성화
+- 모바일 편집 중 얼굴이 계속 보이는 sticky 미리보기
 - 6개 실험용 룩, 부위 잠금, 20단계 Undo/Redo, 헤어 질감 3종·아이섀도/아이라인·립 4재질·블러셔 2배치 조절
 - 원본 홀드, 동일 프레임 라이브 2분할, 사진 4분할
 - 라이브 프레임+recipe revision 동결 후 IMAGE 모드 재분석
