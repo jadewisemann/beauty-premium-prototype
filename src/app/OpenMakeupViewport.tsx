@@ -2,12 +2,14 @@ import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import { OpenMakeup, type MakeupEngine } from 'open-makeup-sdk';
 // @ts-expect-error OpenMakeupSDK's three peer ships without TypeScript declarations.
-import { CanvasTexture, Color, Mesh, ShaderMaterial, type Scene } from 'three';
+import { CanvasTexture, Color, Mesh, ShaderMaterial, Vector2, type Scene } from 'three';
 import { paintHairMask } from './hair-color';
 import { applyOpenMakeup, type MakeupEngineInternals, type MakeupState } from './open-makeup';
 
 const ASSETS_URL = 'https://cdn.jsdelivr.net/npm/open-makeup-sdk@0.1.0/assets';
 const MEDIAPIPE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619';
+const HAIR_INPUT_SIZE = 512;
+const HAIR_FRAME_INTERVAL_MS = 33;
 
 interface EngineInternals extends MakeupEngine, MakeupEngineInternals {
   _CameraClass: typeof ExistingVideoCamera;
@@ -102,7 +104,7 @@ function addHairColor(
   const inputContext = input.getContext('2d');
   const maskContext = maskCanvas.getContext('2d');
   if (!inputContext || !maskContext) throw new Error('헤어: canvas를 만들 수 없습니다.');
-  const initialScale = Math.min(1, 320 / Math.max(video.videoWidth, video.videoHeight));
+  const initialScale = Math.min(1, HAIR_INPUT_SIZE / Math.max(video.videoWidth, video.videoHeight));
   input.width = maskCanvas.width = Math.max(1, Math.round(video.videoWidth * initialScale));
   input.height = maskCanvas.height = Math.max(1, Math.round(video.videoHeight * initialScale));
 
@@ -111,6 +113,7 @@ function addHairColor(
     uniforms: {
       uSource: { value: engine.videoTexture },
       uMask: { value: texture },
+      uMaskTexel: { value: new Vector2(1 / maskCanvas.width, 1 / maskCanvas.height) },
       uTarget: { value: new Color(hair.current.color) },
       uStrength: { value: hair.current.strength },
     },
@@ -118,18 +121,54 @@ function addHairColor(
     fragmentShader: `
       uniform sampler2D uSource;
       uniform sampler2D uMask;
+      uniform vec2 uMaskTexel;
       uniform vec3 uTarget;
       uniform float uStrength;
       varying vec2 vUv;
+
+      vec3 toLinear(vec3 color) {
+        return mix(color / 12.92, pow((color + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), color));
+      }
+
+      vec3 toSrgb(vec3 color) {
+        return mix(color * 12.92, 1.055 * pow(max(color, 0.0), vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), color));
+      }
+
+      float luma(vec3 color) {
+        return dot(color, vec3(0.2126, 0.7152, 0.0722));
+      }
+
+      float refinedMask(vec2 uv) {
+        float centerLuma = luma(toLinear(texture2D(uSource, uv).rgb));
+        float weightedMask = 0.0;
+        float totalWeight = 0.0;
+        for (int y = -2; y <= 2; y++) {
+          for (int x = -2; x <= 2; x++) {
+            vec2 offset = vec2(float(x), float(y)) * uMaskTexel;
+            vec2 sampleUv = clamp(uv + offset, vec2(0.0), vec2(1.0));
+            float distanceWeight = exp(-float(x * x + y * y) * 0.25);
+            float edgeWeight = exp(-abs(luma(toLinear(texture2D(uSource, sampleUv).rgb)) - centerLuma) * 18.0);
+            float weight = distanceWeight * edgeWeight;
+            weightedMask += texture2D(uMask, sampleUv).r * weight;
+            totalWeight += weight;
+          }
+        }
+        return weightedMask / max(totalWeight, 0.0001);
+      }
+
       void main() {
-        float mask = smoothstep(0.35, 0.75, texture2D(uMask, vUv).r);
+        float mask = smoothstep(0.30, 0.72, refinedMask(vUv));
         if (mask < 0.01) discard;
         vec3 source = texture2D(uSource, vUv).rgb;
-        vec3 luma = vec3(0.2126, 0.7152, 0.0722);
-        float sourceLuma = dot(source, luma);
-        float targetLuma = max(dot(uTarget, luma), 0.01);
-        vec3 tinted = clamp(uTarget * ((sourceLuma + 0.04) / (targetLuma + 0.04)), 0.0, 1.0);
-        gl_FragColor = vec4(mix(source, tinted, uStrength * 0.8), mask * 0.9);
+        vec3 sourceLinear = toLinear(source);
+        vec3 targetLinear = toLinear(uTarget);
+        float sourceLuma = luma(sourceLinear);
+        float targetLuma = max(luma(targetLinear), 0.01);
+        vec3 tinted = toSrgb(clamp(targetLinear * ((sourceLuma + 0.02) / (targetLuma + 0.02)), 0.0, 1.0));
+        float highlightProtection = smoothstep(0.65, 0.98, sourceLuma);
+        float visibleTexture = mix(0.55, 1.0, smoothstep(0.01, 0.12, sourceLuma));
+        float strength = uStrength * 0.8 * visibleTexture * (1.0 - highlightProtection * 0.5);
+        gl_FragColor = vec4(mix(source, tinted, strength), mask * 0.9);
       }
     `,
     transparent: true,
@@ -159,6 +198,7 @@ function addHairColor(
       maskCanvas.width = data.width;
       maskCanvas.height = data.height;
       imageData = maskContext.createImageData(data.width, data.height);
+      material.uniforms.uMaskTexel.value.set(1 / data.width, 1 / data.height);
     }
     paintHairMask(data.mask, imageData.data);
     maskContext.putImageData(imageData, 0, 0);
@@ -174,8 +214,8 @@ function addHairColor(
   const draw = (now: number) => {
     if (cancelled()) return;
     if (plane.geometry !== engine.videoPlane.geometry) plane.geometry = engine.videoPlane.geometry;
-    if (!busy && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && now - lastRun >= 66) {
-      const scale = Math.min(1, 320 / Math.max(video.videoWidth, video.videoHeight));
+    if (!busy && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && now - lastRun >= HAIR_FRAME_INTERVAL_MS) {
+      const scale = Math.min(1, HAIR_INPUT_SIZE / Math.max(video.videoWidth, video.videoHeight));
       const width = Math.max(1, Math.round(video.videoWidth * scale));
       const height = Math.max(1, Math.round(video.videoHeight * scale));
       if (input.width !== width || input.height !== height) {
