@@ -17,18 +17,18 @@ export interface EngineConfig {
   jpegQuality: number;
 }
 
-/** Initial, deliberately conservative G0 operating values from the specification. */
+/** Initial G0 operating values, tuned to keep camera rendering ahead of ML inference. */
 export const initialEngineConfig = {
   liveLongEdge: 960,
   photoAnalysisLongEdge: 1536,
   exportLongEdgeMax: 2048,
-  faceMaxHz: 20,
-  hairMaxHz: 8,
+  faceMaxHz: 12,
+  hairMaxHz: 3,
   maskWorkingLongEdge: 256,
   faceFadeStartMs: 150,
   faceExpireMs: 300,
-  hairFadeStartMs: 250,
-  hairExpireMs: 450,
+  hairFadeStartMs: 450,
+  hairExpireMs: 800,
   stationaryTauMs: 100,
   movingTauMs: 40,
   maxHistoryWeight: 0.8,
