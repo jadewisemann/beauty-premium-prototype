@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "package": {
+    "name": "@mediapipe/tasks-vision",
+    "version": "1.0.1"
+  },
+  "wasm": {
+    "directory": "/vendor/mediapipe",
+    "files": [
+      "vision_wasm_internal.js",
+      "vision_wasm_internal.wasm",
+      "vision_wasm_module_internal.js",
+      "vision_wasm_module_internal.wasm",
+      "vision_wasm_nosimd_internal.js",
+      "vision_wasm_nosimd_internal.wasm"
+    ]
+  },
+  "models": [
+    {
+      "id": "face-landmarker",
+      "localPath": "/models/face_landmarker.task",
+      "sourceUrl": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      "bytes": 3758596,
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "input": "Image or video frame.",
+      "output": "Face landmarks; blendshapes and facial transformation matrices when enabled.",
+      "license": {
+        "spdx": "Apache-2.0",
+        "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+        "modelCards": [
+          {
+            "component": "BlazeFace short-range",
+            "url": "https://storage.googleapis.com/mediapipe-assets/MediaPipe%20BlazeFace%20Model%20Card%20%28Short%20Range%29.pdf"
+          },
+          {
+            "component": "FaceMesh V2",
+            "url": "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf"
+          },
+          {
+            "component": "Blendshape V2",
+            "url": "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Blendshape%20V2.pdf"
+          }
+        ],
+        "redistributionNotice": "The FaceLandmarker bundle contains the listed component models. When distributing this bundled asset, retain applicable Apache-2.0 license and notice information."
+      }
+    },
+    {
+      "id": "hair-segmenter",
+      "localPath": "/models/hair_segmenter.tflite",
+      "sourceUrl": "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/1/hair_segmenter.tflite",
+      "bytes": 781618,
+      "sha256": "2628cf3ce5f695f604cbea2841e00befcaa3624bf80caf3664bef2656d59bf84",
+      "input": "Image.",
+      "output": {
+        "type": "confidence-mask",
+        "labels": [
+          "background",
+          "hair"
+        ],
+        "hairChannelIndex": 1
+      },
+      "license": {
+        "spdx": "Apache-2.0",
+        "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+        "modelCards": [
+          {
+            "component": "Hair Segmenter",
+            "url": "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20-%20Hair%20Segmentation.pdf"
+          }
+        ],
+        "redistributionNotice": "When distributing this bundled asset, retain applicable Apache-2.0 license and notice information."
+      }
+    }
+  ]
+}

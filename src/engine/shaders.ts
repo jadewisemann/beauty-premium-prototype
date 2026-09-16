@@ -1,0 +1,275 @@
+export const fullscreenVertexShader = `#version 300 es
+precision highp float;
+
+const vec2 POSITIONS[3] = vec2[3](
+  vec2(-1.0, -1.0),
+  vec2(3.0, -1.0),
+  vec2(-1.0, 3.0)
+);
+
+out vec2 vUv;
+
+void main() {
+  vec2 position = POSITIONS[gl_VertexID];
+  gl_Position = vec4(position, 0.0, 1.0);
+  vUv = vec2(position.x * 0.5 + 0.5, 1.0 - (position.y * 0.5 + 0.5));
+}
+`;
+
+export const refineMaskFragmentShader = `#version 300 es
+precision highp float;
+
+in vec2 vUv;
+uniform sampler2D uSource;
+uniform sampler2D uRawMask;
+uniform vec2 uTexel;
+uniform float uSigmaColor;
+uniform float uLow;
+uniform float uHigh;
+out vec4 outColor;
+
+vec3 srgbToLinear(vec3 value) {
+  bvec3 cutoff = lessThanEqual(value, vec3(0.04045));
+  vec3 low = value / 12.92;
+  vec3 high = pow((value + 0.055) / 1.055, vec3(2.4));
+  return mix(high, low, cutoff);
+}
+
+void main() {
+  vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+  vec3 center = srgbToLinear(texture(uSource, uv).rgb);
+  float weighted = 0.0;
+  float weights = 0.0;
+  for (int y = -2; y <= 2; y += 1) {
+    for (int x = -2; x <= 2; x += 1) {
+      vec2 offset = vec2(float(x), float(y)) * uTexel;
+      vec3 sampleColor = srgbToLinear(texture(uSource, uv + offset).rgb);
+      vec3 delta = center - sampleColor;
+      float spatial = exp(-float(x * x + y * y) / (2.0 * 1.2 * 1.2));
+      float colorWeight = exp(-dot(delta, delta) / max(2.0 * uSigmaColor * uSigmaColor, 0.00001));
+      float weight = spatial * colorWeight;
+      weighted += texture(uRawMask, uv + offset).r * weight;
+      weights += weight;
+    }
+  }
+  float confidence = weighted / max(weights, 0.00001);
+  float coverage = smoothstep(uLow, uHigh, clamp(confidence, 0.0, 1.0));
+  outColor = vec4(coverage, coverage, coverage, 1.0);
+}
+`;
+
+export const luminanceFragmentShader = `#version 300 es
+precision highp float;
+
+in vec2 vUv;
+uniform sampler2D uSource;
+uniform sampler2D uMask;
+uniform vec2 uTexel;
+out vec4 outColor;
+
+vec3 srgbToLinear(vec3 value) {
+  bvec3 cutoff = lessThanEqual(value, vec3(0.04045));
+  vec3 low = value / 12.92;
+  vec3 high = pow((value + 0.055) / 1.055, vec3(2.4));
+  return mix(high, low, cutoff);
+}
+
+void main() {
+  vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+  float total = 0.0;
+  float weights = 0.0;
+  for (int y = -2; y <= 2; y += 1) {
+    for (int x = -2; x <= 2; x += 1) {
+      vec2 offset = vec2(float(x), float(y)) * uTexel * 3.0;
+      float mask = texture(uMask, uv + offset).r;
+      vec3 linear = srgbToLinear(texture(uSource, uv + offset).rgb);
+      float luminance = max(dot(linear, vec3(0.2126, 0.7152, 0.0722)), 0.003);
+      float weight = 0.08 + mask;
+      total += log2(luminance) * weight;
+      weights += weight;
+    }
+  }
+  float encoded = clamp((total / max(weights, 0.00001) + 12.0) / 16.0, 0.0, 1.0);
+  outColor = vec4(encoded, encoded, encoded, 1.0);
+}
+`;
+
+export const temporalMaskFragmentShader = `#version 300 es
+precision highp float;
+
+in vec2 vUv;
+uniform sampler2D uCurrent;
+uniform sampler2D uPrevious;
+uniform mat3 uCurrentToPrevious;
+uniform float uHistoryWeight;
+out vec4 outColor;
+
+void main() {
+  vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+  vec3 mapped = uCurrentToPrevious * vec3(uv, 1.0);
+  vec2 previousUv = mapped.xy / max(mapped.z, 0.00001);
+  float current = texture(uCurrent, uv).r;
+  float valid = step(0.0, previousUv.x) * step(previousUv.x, 1.0) * step(0.0, previousUv.y) * step(previousUv.y, 1.0);
+  float previous = texture(uPrevious, clamp(previousUv, 0.0, 1.0)).r;
+  float stable = mix(current, previous, uHistoryWeight * valid);
+  outColor = vec4(stable, stable, stable, 1.0);
+}
+`;
+
+export const compositeFragmentShader = `#version 300 es
+precision highp float;
+
+in vec2 vUv;
+uniform sampler2D uSource;
+uniform sampler2D uRawMask;
+uniform sampler2D uRefinedMask;
+uniform sampler2D uLargeLuma;
+uniform sampler2D uLipMask;
+uniform int uView;
+uniform bool uSplitCompare;
+uniform bool uMirror;
+uniform vec3 uHairTarget;
+uniform vec3 uLipTarget;
+uniform vec3 uBlushTarget;
+uniform float uHairStrength;
+uniform float uHairChromaMix;
+uniform float uHairLiftStops;
+uniform float uDetailKeep;
+uniform float uDetailLimit;
+uniform float uHighlightProtect;
+uniform float uEdgeStrength;
+uniform float uHairFreshness;
+uniform float uLipStrength;
+uniform float uLipSatin;
+uniform float uFaceFreshness;
+uniform float uBlushStrength;
+uniform vec4 uBlushLeft;
+uniform vec4 uBlushRight;
+uniform float uBlushAngle;
+uniform vec4 uFaceEllipse;
+out vec4 outColor;
+
+vec3 srgbToLinear(vec3 value) {
+  bvec3 cutoff = lessThanEqual(value, vec3(0.04045));
+  vec3 low = value / 12.92;
+  vec3 high = pow((value + 0.055) / 1.055, vec3(2.4));
+  return mix(high, low, cutoff);
+}
+
+vec3 linearToSrgb(vec3 value) {
+  value = max(value, vec3(0.0));
+  bvec3 cutoff = lessThanEqual(value, vec3(0.0031308));
+  vec3 low = value * 12.92;
+  vec3 high = 1.055 * pow(value, vec3(1.0 / 2.4)) - 0.055;
+  return mix(high, low, vec3(cutoff));
+}
+
+vec3 linearToOklab(vec3 color) {
+  vec3 lms = transpose(mat3(
+    0.4122214708, 0.5363325363, 0.0514459929,
+    0.2119034982, 0.6806995451, 0.1073969566,
+    0.0883024619, 0.2817188376, 0.6299787005
+  )) * color;
+  lms = sign(lms) * pow(abs(lms), vec3(1.0 / 3.0));
+  return transpose(mat3(
+    0.2104542553, 0.7936177850, -0.0040720468,
+    1.9779984951, -2.4285922050, 0.4505937099,
+    0.0259040371, 0.7827717662, -0.8086757660
+  )) * lms;
+}
+
+vec3 oklabToLinear(vec3 color) {
+  vec3 lms = transpose(mat3(
+    1.0, 0.3963377774, 0.2158037573,
+    1.0, -0.1055613458, -0.0638541728,
+    1.0, -0.0894841775, -1.2914855480
+  )) * color;
+  lms = lms * lms * lms;
+  return transpose(mat3(
+    4.0767416621, -3.3077115913, 0.2309699292,
+    -1.2684380046, 2.6097574011, -0.3413193965,
+    -0.0041960863, -0.7034186147, 1.7076147010
+  )) * lms;
+}
+
+vec3 gamutMap(vec3 lab) {
+  vec3 candidate = oklabToLinear(lab);
+  for (int index = 0; index < 6; index += 1) {
+    if (all(greaterThanEqual(candidate, vec3(0.0))) && all(lessThanEqual(candidate, vec3(1.0)))) break;
+    lab.yz *= 0.82;
+    candidate = oklabToLinear(lab);
+  }
+  return clamp(candidate, 0.0, 1.0);
+}
+
+float blushEllipse(vec2 uv, vec4 ellipse, float angle) {
+  if (ellipse.z <= 0.0 || ellipse.w <= 0.0) return 0.0;
+  vec2 point = uv - ellipse.xy;
+  float c = cos(angle);
+  float s = sin(angle);
+  vec2 local = vec2(c * point.x + s * point.y, -s * point.x + c * point.y);
+  float radius = dot(local / ellipse.zw, local / ellipse.zw);
+  return exp(-2.5 * radius);
+}
+
+void main() {
+  vec2 uv = vec2(uMirror ? 1.0 - vUv.x : vUv.x, vUv.y);
+  vec3 sourceSrgb = texture(uSource, uv).rgb;
+  float rawMask = texture(uRawMask, uv).r;
+  float refinedMask = texture(uRefinedMask, uv).r;
+  if (uView == 0) {
+    outColor = vec4(sourceSrgb, 1.0);
+    return;
+  }
+  if (uView == 1) {
+    outColor = vec4(vec3(rawMask), 1.0);
+    return;
+  }
+  if (uView == 2) {
+    outColor = vec4(vec3(refinedMask), 1.0);
+    return;
+  }
+  if (uSplitCompare && vUv.x < 0.5) {
+    outColor = vec4(sourceSrgb, 1.0);
+    return;
+  }
+
+  vec3 linear = srgbToLinear(sourceSrgb);
+  float luminance = max(dot(linear, vec3(0.2126, 0.7152, 0.0722)), 0.003);
+  float logLuminance = log2(luminance);
+  float base = texture(uLargeLuma, uv).r * 16.0 - 12.0;
+  float detail = clamp(logLuminance - base, -uDetailLimit, uDetailLimit);
+  float newLogLuminance = base + uHairLiftStops + uDetailKeep * detail;
+  vec3 scaled = linear * (exp2(newLogLuminance) / luminance);
+  vec3 hairLab = linearToOklab(max(scaled, vec3(0.0)));
+  vec3 targetLab = linearToOklab(srgbToLinear(uHairTarget));
+  float highlight = smoothstep(0.55, 1.0, hairLab.x) * uHighlightProtect;
+  hairLab.yz = mix(hairLab.yz, targetLab.yz, uHairChromaMix * (1.0 - highlight));
+  vec3 hairLinear = gamutMap(hairLab);
+  float edge = mix(uEdgeStrength, 1.0, smoothstep(0.4, 0.9, refinedMask));
+  float hairAlpha = refinedMask * edge * uHairStrength * uHairFreshness;
+  linear = mix(linear, hairLinear, clamp(hairAlpha, 0.0, 1.0));
+
+  float lipMask = texture(uLipMask, uv).r * uLipStrength * uFaceFreshness;
+  if (lipMask > 0.001) {
+    vec3 lipLab = linearToOklab(linear);
+    vec3 lipTarget = linearToOklab(srgbToLinear(uLipTarget));
+    lipLab.yz = mix(lipLab.yz, lipTarget.yz, 0.82);
+    lipLab.x = clamp(lipLab.x + (lipLab.x - 0.5) * 0.08 * uLipSatin, 0.0, 1.0);
+    linear = mix(linear, gamutMap(lipLab), clamp(lipMask, 0.0, 1.0));
+  }
+
+  float blushMask = max(blushEllipse(uv, uBlushLeft, uBlushAngle), blushEllipse(uv, uBlushRight, uBlushAngle));
+  vec2 faceLocal = (uv - uFaceEllipse.xy) / max(uFaceEllipse.zw, vec2(0.0001));
+  float faceClip = 1.0 - smoothstep(0.82, 1.05, dot(faceLocal, faceLocal));
+  blushMask *= faceClip * (1.0 - refinedMask * 0.85) * (1.0 - lipMask) * uBlushStrength * uFaceFreshness;
+  if (blushMask > 0.001) {
+    vec3 blushLab = linearToOklab(linear);
+    vec3 blushTarget = linearToOklab(srgbToLinear(uBlushTarget));
+    blushLab.yz = mix(blushLab.yz, blushTarget.yz, 0.55);
+    linear = mix(linear, gamutMap(blushLab), clamp(blushMask, 0.0, 0.45));
+  }
+
+  outColor = vec4(linearToSrgb(linear), 1.0);
+}
+`;
