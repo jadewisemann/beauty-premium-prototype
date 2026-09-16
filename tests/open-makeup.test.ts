@@ -1,25 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
-import { applyOpenMakeupRecipe } from '../src/app/open-makeup';
-import { DRAFT_LOOKS } from '../src/looks/presets';
+import { expect, it, vi } from 'vitest';
+import { applyOpenMakeup, type MakeupState } from '../src/app/open-makeup';
 import type { Category } from 'open-makeup-sdk';
 
-describe('OpenMakeupSDK recipe bridge', () => {
-  it('maps enabled regions and clears disabled ones', async () => {
-    const recipe = structuredClone(DRAFT_LOOKS[0]);
-    recipe.eye.linerStrength = 0;
-    recipe.blush.strength = 1.5;
-    const apply = vi.fn(async (category: string) => ({ category: category as Category, color: '', finish: null, pattern: null }));
-    const clear = vi.fn();
-    const engine = {
-      eyeShadowMat: { uniforms: { _transparency: { value: -1 } } },
-      blushMat: { uniforms: { _transparency: { value: -1 } } },
-    };
+it('applies enabled makeup layers and clears disabled layers', async () => {
+  const state: MakeupState = {
+    foundation: { enabled: true, color: '#d9a57f', finish: 'matte' },
+    lipstick: { enabled: false, color: '#ce4b62', finish: 'glossy' },
+    blush: { enabled: true, color: '#e26d7a', finish: 'matte' },
+    eyeshadow: { enabled: true, color: '#5c382e', finish: 'matte' },
+    eyeline: { enabled: false, color: '#1a1110' },
+  };
+  const apply = vi.fn(async (category: string) => ({ category: category as Category, color: '', finish: null, pattern: null }));
+  const clear = vi.fn();
 
-    await applyOpenMakeupRecipe({ apply, clear }, recipe, engine);
+  await applyOpenMakeup({ apply, clear }, state);
 
-    expect(apply.mock.calls.map(([category]) => category)).toEqual(['lipstick', 'eyeshadow', 'blush']);
-    expect(clear).toHaveBeenCalledWith('eyeline');
-    expect(engine.eyeShadowMat.uniforms._transparency.value).toBe(recipe.eye.shadowStrength);
-    expect(engine.blushMat.uniforms._transparency.value).toBe(1);
-  });
+  expect(apply.mock.calls.map(([category]) => category)).toEqual(['foundation', 'blush', 'eyeshadow']);
+  expect(clear.mock.calls.map(([category]) => category)).toEqual(['lipstick', 'eyeline']);
 });
