@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import { OpenMakeup, type MakeupEngine } from 'open-makeup-sdk';
 // @ts-expect-error OpenMakeupSDK's three peer ships without TypeScript declarations.
-import { CanvasTexture, Mesh, MeshBasicMaterial, type Scene } from 'three';
-import { tintHairMask } from './hair-color';
+import { CanvasTexture, Color, Mesh, ShaderMaterial, type Scene } from 'three';
+import { paintHairMask } from './hair-color';
 import { applyOpenMakeup, type MakeupEngineInternals, type MakeupState } from './open-makeup';
 
 const ASSETS_URL = 'https://cdn.jsdelivr.net/npm/open-makeup-sdk@0.1.0/assets';
@@ -13,6 +13,7 @@ interface EngineInternals extends MakeupEngine, MakeupEngineInternals {
   _CameraClass: typeof ExistingVideoCamera;
   scene: Scene;
   videoPlane: Mesh;
+  videoTexture: unknown;
   lipsMat?: unknown;
   foundationMat?: unknown;
   eyeLineMat?: unknown;
@@ -106,7 +107,36 @@ function addHairColor(
   input.height = maskCanvas.height = Math.max(1, Math.round(video.videoHeight * initialScale));
 
   const texture = new CanvasTexture(maskCanvas);
-  const material = new MeshBasicMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
+  const material = new ShaderMaterial({
+    uniforms: {
+      uSource: { value: engine.videoTexture },
+      uMask: { value: texture },
+      uTarget: { value: new Color(hair.current.color) },
+      uStrength: { value: hair.current.strength },
+    },
+    vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform sampler2D uSource;
+      uniform sampler2D uMask;
+      uniform vec3 uTarget;
+      uniform float uStrength;
+      varying vec2 vUv;
+      void main() {
+        float mask = smoothstep(0.35, 0.75, texture2D(uMask, vUv).r);
+        if (mask < 0.01) discard;
+        vec3 source = texture2D(uSource, vUv).rgb;
+        vec3 luma = vec3(0.2126, 0.7152, 0.0722);
+        float sourceLuma = dot(source, luma);
+        float targetLuma = max(dot(uTarget, luma), 0.01);
+        vec3 tinted = clamp(uTarget * ((sourceLuma + 0.04) / (targetLuma + 0.04)), 0.0, 1.0);
+        gl_FragColor = vec4(mix(source, tinted, uStrength * 0.8), mask * 0.9);
+      }
+    `,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false,
+  });
   const plane = new Mesh(engine.videoPlane.geometry, material);
   plane.renderOrder = 20;
   plane.position.z = 20;
@@ -130,9 +160,11 @@ function addHairColor(
       maskCanvas.height = data.height;
       imageData = maskContext.createImageData(data.width, data.height);
     }
-    tintHairMask(data.mask, imageData.data, hair.current.color, hair.current.strength);
+    paintHairMask(data.mask, imageData.data);
     maskContext.putImageData(imageData, 0, 0);
     texture.needsUpdate = true;
+    material.uniforms.uTarget.value.set(hair.current.color);
+    material.uniforms.uStrength.value = hair.current.strength;
     if (!ready) {
       ready = true;
       callbacks.current.onHairReady(true);
