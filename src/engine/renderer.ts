@@ -120,10 +120,12 @@ export class BeautyRenderer {
     this.sourceWidth = width;
     this.sourceHeight = height;
     gl.bindTexture(gl.TEXTURE_2D, this.source.texture);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    if (this.source.width === width && this.source.height === height) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    }
     this.source.width = width;
     this.source.height = height;
     this.sourceDirty = true;
@@ -154,10 +156,13 @@ export class BeautyRenderer {
     if (this.disposed || this.lost) return;
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.lipMask.texture);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-    if (mask) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mask);
-    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    if (mask && this.lipMask.width === width && this.lipMask.height === height) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, mask);
+    } else if (mask) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mask);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+    }
     this.lipMask.width = mask ? width : 1;
     this.lipMask.height = mask ? height : 1;
   }

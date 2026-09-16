@@ -32,11 +32,49 @@ test.describe('G0 runtime', () => {
   });
 
   test('runs the bounded live camera path with a browser fixture stream', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
+        configurable: true,
+        value: async () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 640;
+          canvas.height = 480;
+          const context = canvas.getContext('2d')!;
+          const paint = () => {
+            context.fillStyle = '#ff0000';
+            context.fillRect(0, 0, canvas.width, canvas.height / 2);
+            context.fillStyle = '#0000ff';
+            context.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2);
+            requestAnimationFrame(paint);
+          };
+          paint();
+          return canvas.captureStream(30);
+        },
+      });
+    });
     await page.goto('/');
     await expectReady(page);
     await page.getByRole('button', { name: '카메라', exact: true }).click();
-    await expect(page.locator('.state-pill')).toHaveText(/라이브|오류/, { timeout: 15_000 });
+    await expect(page.locator('.state-pill')).toHaveText(/라이브|오류/, { timeout: 30_000 });
     if (await page.locator('.state-pill').innerText() === '오류') throw new Error(await page.getByRole('alert').innerText());
+    await page.getByRole('button', { name: '원본', exact: true }).click();
+    const preview = page.getByLabel('뷰티 효과 미리보기');
+    await expect.poll(async () => {
+      const screenshot = await preview.screenshot();
+      return page.evaluate(async (source) => {
+        const image = new Image();
+        image.src = source;
+        await image.decode();
+        const copy = document.createElement('canvas');
+        copy.width = image.width;
+        copy.height = image.height;
+        const context = copy.getContext('2d')!;
+        context.drawImage(image, 0, 0);
+        const top = context.getImageData(image.width / 2, image.height / 4, 1, 1).data;
+        const bottom = context.getImageData(image.width / 2, image.height * 3 / 4, 1, 1).data;
+        return [Array.from(top), Array.from(bottom)];
+      }, `data:image/png;base64,${screenshot.toString('base64')}`);
+    }, { timeout: 10_000 }).toEqual([[255, 0, 0, 255], [0, 0, 255, 255]]);
     await expect.poll(async () => Number(await page.getByLabel('진단 정보').locator('div').filter({ hasText: '프레임 완료' }).locator('dd').innerText()), { timeout: 30_000 }).toBeGreaterThan(0);
     await expect(page.getByRole('button', { name: '촬영' })).toBeEnabled();
     await page.getByRole('button', { name: '촬영' }).click();

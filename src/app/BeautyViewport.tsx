@@ -44,6 +44,8 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
     let renderer: BeautyRenderer;
     let recreateRenderer = false;
     let lastPhoto: ImageBitmap | null = null;
+    let lastVideoGeneration = -1;
+    let lastVideoTime = Number.NaN;
     let resizedPhoto: ImageBitmap | null = null;
     let resizedPhotoSource: ImageBitmap | null = null;
     let resizedPhotoSize = '';
@@ -76,6 +78,14 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
       const width = snapshot.sourceKind === 'photo' ? snapshot.photoBitmap?.width : video?.videoWidth;
       const height = snapshot.sourceKind === 'photo' ? snapshot.photoBitmap?.height : video?.videoHeight;
       if (source && width && height && (snapshot.sourceKind === 'photo' || (video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA))) {
+        if (snapshot.sourceKind !== 'photo' && video) {
+          if (snapshot.generation === lastVideoGeneration && video.currentTime === lastVideoTime) {
+            frame = requestAnimationFrame(draw);
+            return;
+          }
+          lastVideoGeneration = snapshot.generation;
+          lastVideoTime = video.currentTime;
+        }
         const limit = snapshot.sourceKind === 'photo' ? initialEngineConfig.exportLongEdgeMax : initialEngineConfig.liveLongEdge;
         const scale = Math.min(1, limit / Math.max(width, height)) * propsRef.current.resolutionScale;
         const renderWidth = Math.max(1, Math.round(width * scale));

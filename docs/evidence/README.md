@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 모델/WASM 초기화 | Playwright Chromium, production preview | PASS | 실제 모바일 아님 |
 | 권한 거절 | `NotAllowedError` 주입 | PASS | 브라우저 실제 권한 UI 아님 |
-| 라이브 | Chromium fixed fake camera | PASS | 실제 얼굴·모바일 카메라 아님 |
+| 라이브 | Chromium fixed fake camera + 상하 색 띠 canvas capture | PASS | 방향 회귀·bounded path 검증, 실제 얼굴·모바일 카메라 아님 |
 | 사진 인식 | 공식 MediaPipe `face_model.png` 고정 fixture | PASS, face 478 / hair 640×640 | 한 인물·한 조건 |
 | 룩 변경 캐시 | 사진 편집 중 completed-frame 불변 | PASS | 장기 100회 수동 검증 아님 |
 | 비교·저장 | 2분할, 4분할, JPEG download | PASS | 실제 Safari/Chrome 다운로드 UI 아님 |

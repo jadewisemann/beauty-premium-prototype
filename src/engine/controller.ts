@@ -342,7 +342,14 @@ export class BeautyController {
     if (!faceDue && !hairDue) return;
     this.bitmapCreationPending = true;
     try {
-      const bitmap = await createImageBitmap(video);
+      const scale = Math.min(1, initialEngineConfig.liveLongEdge / Math.max(video.videoWidth, video.videoHeight));
+      const bitmap = scale < 1
+        ? await createImageBitmap(video, {
+            resizeWidth: Math.max(1, Math.round(video.videoWidth * scale)),
+            resizeHeight: Math.max(1, Math.round(video.videoHeight * scale)),
+            resizeQuality: 'medium',
+          })
+        : await createImageBitmap(video);
       if (this.snapshot.state !== 'LIVE') {
         bitmap.close();
         return;
