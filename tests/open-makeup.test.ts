@@ -1,8 +1,8 @@
 import { expect, it, vi } from 'vitest';
-import { applyOpenMakeup, type MakeupState } from '../src/app/open-makeup';
 import type { Category } from 'open-makeup-sdk';
+import { applyOpenMakeup, type MakeupState } from '../src/app/open-makeup';
 
-it('applies enabled makeup layers and clears disabled layers', async () => {
+it('applies enabled makeup and clears disabled makeup', async () => {
   const state: MakeupState = {
     foundation: { enabled: true, color: '#d9a57f', finish: 'matte' },
     lipstick: { enabled: false, color: '#ce4b62', finish: 'glossy' },

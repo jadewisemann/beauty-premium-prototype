@@ -6,10 +6,14 @@ test('opens a mobile-first live beauty mirror', async ({ page }) => {
 
   await expect(page.getByRole('button', { name: '카메라 시작' })).toBeVisible();
   await page.getByRole('button', { name: '카메라 시작' }).click();
-  await expect(page.locator('.source-video')).toHaveClass(/visible/);
-  await expect(page.getByRole('button', { name: '헤어' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '베이스' })).toBeVisible();
-  await expect(page.locator('.stage-card')).toHaveCSS('position', 'sticky');
+  await expect(page.locator('video')).toHaveClass(/visible/);
+  await expect(page.getByText('색상 강도')).toBeVisible();
+  await expect(page.locator('.stage')).toHaveCSS('position', 'sticky');
+  await expect(page.locator('.stage canvas')).toHaveCount(1);
+  await expect(page.locator('header > strong')).toHaveAttribute('data-makeup-ready', 'true', { timeout: 15_000 });
+  await expect(page.locator('header > strong')).toHaveAttribute('data-hair-ready', 'true', { timeout: 15_000 });
+  await expect(page.locator('header > strong')).toHaveText('LIVE');
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
 test('shows a recoverable camera error', async ({ page }) => {
