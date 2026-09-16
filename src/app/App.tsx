@@ -60,19 +60,19 @@ export function App() {
   };
 
   return <main>
-    <header><div><small>BECON · LIVE</small><h1>Beauty Mirror</h1></div><strong data-makeup-ready={makeupReady} data-hair-ready={hairReady}>{live ? (hairReady && makeupReady ? 'LIVE' : '준비 중') : '대기'}</strong></header>
+    <header className="glass-surface"><div><small>BECON BEAUTY LAB</small><h1>Beauty Mirror</h1></div><strong data-makeup-ready={makeupReady} data-hair-ready={hairReady}>{live ? (hairReady && makeupReady ? 'LIVE' : '준비 중') : '대기'}</strong></header>
 
     <section className="stage">
       <video ref={videoRef} className={live ? 'visible' : ''} muted playsInline />
       {live && <>
         <OpenMakeupViewport videoRef={videoRef} makeup={makeup} hair={hair} onReady={setMakeupReady} onHairReady={setHairReady} onError={setError} />
       </>}
-      {!live && <div className="entry"><h2>내 얼굴을 보면서<br />바로 바꿔보세요</h2><p>헤어와 메이크업은 같은 카메라 영상을 사용합니다.</p><button onClick={() => void startCamera()} disabled={starting}>{starting ? '카메라 여는 중…' : '카메라 시작'}</button></div>}
+      {!live && <div className="entry glass-surface"><small>VIRTUAL BEAUTY STUDIO</small><h2>내 얼굴을 보면서<br />바로 바꿔보세요</h2><p>헤어와 메이크업을 실시간으로 자연스럽게 확인해 보세요.</p><button onClick={() => void startCamera()} disabled={starting}>{starting ? '카메라 여는 중…' : '카메라 시작'}</button></div>}
       {live && (!hairReady || !makeupReady) && <span className="loading">효과 준비 중…</span>}
     </section>
 
     {live && <section className="controls">
-      <nav>{(['hair', 'foundation', 'lipstick', 'blush', 'eye'] as const).map((item) => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{tabLabel(item)}</button>)}</nav>
+      <nav aria-label="효과 선택">{(['hair', 'foundation', 'lipstick', 'blush', 'eye'] as const).map((item) => <button key={item} aria-pressed={tab === item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{tabLabel(item)}</button>)}</nav>
       {tab === 'hair' && <><Swatches colors={COLORS.hair} selected={hair.color} onSelect={(color) => setHair((current) => ({ ...current, color }))} /><Strength value={hair.strength} onChange={(strength) => setHair((current) => ({ ...current, strength }))} /></>}
       {tab === 'foundation' && <LayerEditor label="베이스" layer="foundation" state={makeup.foundation} colors={COLORS.foundation} onChange={updateLayer} />}
       {tab === 'lipstick' && <LayerEditor label="립" layer="lipstick" state={makeup.lipstick} colors={COLORS.lipstick} finishes onChange={updateLayer} />}
@@ -85,7 +85,7 @@ export function App() {
 }
 
 function LayerEditor<K extends MakeupLayer>({ label, layer, state, colors, finishes = false, onChange }: { label: string; layer: K; state: MakeupState[K]; colors: readonly string[]; finishes?: boolean; onChange(layer: K, patch: Partial<MakeupState[K]>): void }) {
-  return <><Toggle label={label} enabled={state.enabled} onChange={(enabled) => onChange(layer, { enabled } as Partial<MakeupState[K]>)} /><Swatches colors={colors} selected={state.color} onSelect={(color) => onChange(layer, { color } as Partial<MakeupState[K]>)} />{finishes && <div className="finishes">{(['matte', 'shimmer', 'glossy'] as Finish[]).map((finish) => <button key={finish} className={state.finish === finish ? 'active' : ''} onClick={() => onChange(layer, { finish } as Partial<MakeupState[K]>)}>{finish}</button>)}</div>}</>;
+  return <><Toggle label={label} enabled={state.enabled} onChange={(enabled) => onChange(layer, { enabled } as Partial<MakeupState[K]>)} /><Swatches colors={colors} selected={state.color} onSelect={(color) => onChange(layer, { color } as Partial<MakeupState[K]>)} />{finishes && <div className="finishes">{(['matte', 'shimmer', 'glossy'] as Finish[]).map((finish) => <button key={finish} aria-pressed={state.finish === finish} className={state.finish === finish ? 'active' : ''} onClick={() => onChange(layer, { finish } as Partial<MakeupState[K]>)}>{finish}</button>)}</div>}</>;
 }
 
 function Toggle({ label, enabled, onChange }: { label: string; enabled: boolean; onChange(enabled: boolean): void }) {
@@ -93,7 +93,7 @@ function Toggle({ label, enabled, onChange }: { label: string; enabled: boolean;
 }
 
 function Swatches({ colors, selected, onSelect }: { colors: readonly string[]; selected: string; onSelect(color: string): void }) {
-  return <div className="swatches">{colors.map((color) => <button key={color} aria-label={color} className={selected === color ? 'selected' : ''} style={{ background: color }} onClick={() => onSelect(color)} />)}</div>;
+  return <div className="swatches" role="group" aria-label="색상 선택">{colors.map((color) => <button key={color} aria-label={color} aria-pressed={selected === color} className={selected === color ? 'selected' : ''} style={{ background: color }} onClick={() => onSelect(color)} />)}</div>;
 }
 
 function Strength({ value, onChange }: { value: number; onChange(value: number): void }) {

@@ -14,6 +14,9 @@ test('opens a mobile-first live beauty mirror', async ({ page }) => {
   await expect(page.locator('header > strong')).toHaveAttribute('data-hair-ready', 'true', { timeout: 15_000 });
   await expect(page.locator('header > strong')).toHaveText('LIVE');
   await expect(page.getByRole('alert')).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(page.locator('main')).toHaveCSS('width', '430px');
 });
 
 test('shows a recoverable camera error', async ({ page }) => {
