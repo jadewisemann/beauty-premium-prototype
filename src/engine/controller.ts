@@ -4,7 +4,7 @@ import { Diagnostics } from './diagnostics';
 import { CameraInput, decodePhoto, InputError, type DecodedPhoto } from './input';
 import { PerceptionClient, type PerceptionFrame } from './perception';
 import { LatestFrameScheduler } from './scheduler';
-import { createSourceToDisplayTransform } from './transforms';
+import { createSourceToDisplayTransform, predictSimilarityTransform } from './transforms';
 
 export interface ControllerSnapshot {
   state: EngineState;
@@ -21,7 +21,8 @@ type StatusListener = () => void;
 
 export class BeautyController {
   readonly diagnostics = new Diagnostics();
-  private perception = new PerceptionClient();
+  private facePerception = new PerceptionClient('face');
+  private hairPerception = new PerceptionClient('hair');
   private readonly camera = new CameraInput();
   private readonly listeners = new Set<StatusListener>();
   private snapshot: ControllerSnapshot = {
@@ -34,18 +35,21 @@ export class BeautyController {
     photoBitmap: null,
     capturedRecipeRevision: null,
   };
-  private scheduler: LatestFrameScheduler<PerceptionFrame> | null = null;
+  private faceScheduler: LatestFrameScheduler<PerceptionFrame> | null = null;
+  private hairScheduler: LatestFrameScheduler<PerceptionFrame> | null = null;
   private photo: DecodedPhoto | null = null;
   private replayUrl: string | null = null;
   private video: HTMLVideoElement | null = null;
   private videoFrameHandle: number | null = null;
   private animationHandle: number | null = null;
-  private bitmapCreationPending = false;
+  private faceBitmapCreationPending = false;
+  private hairBitmapCreationPending = false;
   private bitmapCreationSequence = 0;
   private lastVideoTime = -1;
   private lastFaceScheduledMs = Number.NEGATIVE_INFINITY;
   private lastHairCompletedMs = Number.NEGATIVE_INFINITY;
-  private activeHairFrameId: number | null = null;
+  private latestLiveFace: FaceSnapshot | null = null;
+  private previousLiveFace: FaceSnapshot | null = null;
   private taskTimestampMs = 0;
   private frameId = 0;
   private disposed = false;
@@ -66,7 +70,7 @@ export class BeautyController {
     const startedAt = performance.now();
     this.transition('LOADING_MODELS');
     try {
-      await withTimeout(this.perception.init(), 15_000, 'Model initialization timed out');
+      await withTimeout(Promise.all([this.facePerception.init(), this.hairPerception.init()]), 15_000, 'Model initialization timed out');
       this.diagnostics.timing('model-load', performance.now() - startedAt);
       this.transition('READY');
     } catch (error) {
@@ -85,9 +89,9 @@ export class BeautyController {
       }
       this.video = video;
       this.diagnostics.setCameraSettings(session.settings);
-      await this.perception.setMode('VIDEO', generation);
+      await this.setPerceptionMode('VIDEO', generation);
       if (generation !== this.snapshot.generation) return;
-      this.scheduler = this.createLiveScheduler('Camera inference timed out');
+      this.createLiveSchedulers('Camera inference timed out');
       this.transition('LIVE');
       this.scheduleLiveFrame();
     } catch (error) {
@@ -126,9 +130,9 @@ export class BeautyController {
       video.playsInline = true;
       await waitForVideo(video);
       await video.play();
-      await this.perception.setMode('VIDEO', generation);
+      await this.setPerceptionMode('VIDEO', generation);
       if (generation !== this.snapshot.generation) return;
-      this.scheduler = this.createLiveScheduler('Replay inference timed out');
+      this.createLiveSchedulers('Replay inference timed out');
       this.transition('LIVE');
       this.scheduleLiveFrame();
     } catch (error) {
@@ -180,14 +184,14 @@ export class BeautyController {
   setVisibility(visible: boolean): void {
     if (!visible && this.snapshot.state === 'LIVE') {
       this.cancelLiveFrame();
-      this.bitmapCreationSequence += 1;
-      this.bitmapCreationPending = false;
+      this.resetLiveScheduling();
       this.transition('PAUSED');
       return;
     }
     if (visible && this.snapshot.state === 'PAUSED' && this.video) {
+      this.resetLiveScheduling();
       const buffer = this.snapshot.hair ? transferableBuffer(this.snapshot.hair.values) : null;
-      if (buffer) this.perception.recycle(buffer);
+      if (buffer) this.hairPerception.recycle(buffer);
       this.snapshot = { ...this.snapshot, face: null, hair: null };
       this.transition('LIVE');
       this.scheduleLiveFrame();
@@ -200,13 +204,15 @@ export class BeautyController {
 
   async recoverRenderer(): Promise<void> {
     if (this.snapshot.error?.code !== 'CONTEXT_LOST') return;
-    this.scheduler?.dispose();
-    this.scheduler = null;
+    this.faceScheduler?.dispose();
+    this.hairScheduler?.dispose();
+    this.faceScheduler = null;
+    this.hairScheduler = null;
     this.cancelLiveFrame();
     this.resetLiveScheduling();
     const previousHair = this.snapshot.hair;
     const buffer = previousHair ? transferableBuffer(previousHair.values) : null;
-    if (buffer) this.perception.recycle(buffer);
+    if (buffer) this.hairPerception.recycle(buffer);
     const generation = this.snapshot.generation + 1;
     const kind = this.snapshot.sourceKind;
     this.snapshot = { ...this.snapshot, generation, error: null, face: null, hair: null };
@@ -215,8 +221,8 @@ export class BeautyController {
       if (kind === 'photo' && this.photo) {
         await this.installPhoto(generation, this.photo, this.snapshot.capturedRecipeRevision);
       } else if ((kind === 'camera' || kind === 'replay') && this.video) {
-        await withTimeout(this.perception.setMode('VIDEO', generation), 15_000, 'Renderer recovery mode switch timed out');
-        this.scheduler = this.createLiveScheduler('Recovered live inference timed out');
+        await withTimeout(this.setPerceptionMode('VIDEO', generation), 15_000, 'Renderer recovery mode switch timed out');
+        this.createLiveSchedulers('Recovered live inference timed out');
         this.transition('LIVE');
         this.scheduleLiveFrame();
       } else {
@@ -232,7 +238,8 @@ export class BeautyController {
     this.disposed = true;
     this.transition('DISPOSING');
     this.stopSource();
-    this.perception.dispose();
+    this.facePerception.dispose();
+    this.hairPerception.dispose();
     this.snapshot = { ...this.snapshot, state: 'IDLE', sourceKind: null };
     this.emit();
     this.listeners.clear();
@@ -258,8 +265,10 @@ export class BeautyController {
 
   private stopSource(): void {
     this.cancelLiveFrame();
-    this.scheduler?.dispose();
-    this.scheduler = null;
+    this.faceScheduler?.dispose();
+    this.hairScheduler?.dispose();
+    this.faceScheduler = null;
+    this.hairScheduler = null;
     this.camera.stop();
     if (this.replayUrl && this.video) {
       this.video.pause();
@@ -273,34 +282,45 @@ export class BeautyController {
     this.replayUrl = null;
     this.resetLiveScheduling();
     const hairBuffer = this.snapshot.hair ? transferableBuffer(this.snapshot.hair.values) : null;
-    if (hairBuffer) this.perception.recycle(hairBuffer);
+    if (hairBuffer) this.hairPerception.recycle(hairBuffer);
   }
 
   private resetLiveScheduling(): void {
     this.bitmapCreationSequence += 1;
-    this.bitmapCreationPending = false;
+    this.faceBitmapCreationPending = false;
+    this.hairBitmapCreationPending = false;
     this.lastFaceScheduledMs = Number.NEGATIVE_INFINITY;
     this.lastHairCompletedMs = Number.NEGATIVE_INFINITY;
-    this.activeHairFrameId = null;
+    this.latestLiveFace = null;
+    this.previousLiveFace = null;
   }
 
   private async installPhoto(generation: number, photo: DecodedPhoto, capturedRecipeRevision: number | null): Promise<void> {
     this.photo = photo;
     this.snapshot = { ...this.snapshot, photoBitmap: photo.bitmap as ImageBitmap, capturedRecipeRevision };
-    await withTimeout(this.perception.setMode('IMAGE', generation), 15_000, 'Photo mode switch timed out');
+    await withTimeout(this.setPerceptionMode('IMAGE', generation), 15_000, 'Photo mode switch timed out');
     if (generation !== this.snapshot.generation) return;
     this.transition('ANALYZING_PHOTO');
-    const bitmap = await createAnalysisBitmap(photo.bitmap as ImageBitmap);
+    const [faceBitmap, hairBitmap] = await Promise.all([
+      createAnalysisBitmap(photo.bitmap as ImageBitmap),
+      createAnalysisBitmap(photo.bitmap as ImageBitmap),
+    ]);
     if (generation !== this.snapshot.generation) {
-      bitmap.close();
+      faceBitmap.close();
+      hairBitmap.close();
       return;
     }
     const meta = this.createFrameMeta('photo', photo.width, photo.height, false);
-    this.scheduler = new LatestFrameScheduler(async (frame) => {
-      await withTimeout(this.perception.analyze(frame), 30_000, 'Photo inference timed out');
-      if (generation === this.snapshot.generation && this.snapshot.state === 'ANALYZING_PHOTO') this.transition('PHOTO');
-    }, (error) => this.handleTaskError(error));
-    this.scheduler.submit({ bitmap, meta, runFace: true, runHair: true, close: () => bitmap.close() });
+    try {
+      await withTimeout(Promise.all([
+        this.facePerception.analyze({ bitmap: faceBitmap, meta, close: () => faceBitmap.close() }),
+        this.hairPerception.analyze({ bitmap: hairBitmap, meta, close: () => hairBitmap.close() }),
+      ]), 30_000, 'Photo inference timed out');
+    } catch (error) {
+      if (generation === this.snapshot.generation) this.handleTaskError(error);
+      return;
+    }
+    if (generation === this.snapshot.generation && this.snapshot.state === 'ANALYZING_PHOTO') this.transition('PHOTO');
   }
 
   private scheduleLiveFrame(): void {
@@ -334,60 +354,94 @@ export class BeautyController {
     this.animationHandle = null;
   }
 
-  private async captureLiveFrame(): Promise<void> {
+  private captureLiveFrame(): void {
     const video = this.video;
-    const scheduler = this.scheduler;
-    if (!video || !scheduler || this.bitmapCreationPending || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    const faceScheduler = this.faceScheduler;
+    const hairScheduler = this.hairScheduler;
+    if (!video || !faceScheduler || !hairScheduler || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
     const generation = this.snapshot.generation;
     const acquiredMs = performance.now();
-    const faceDue = acquiredMs - this.lastFaceScheduledMs >= 1000 / initialEngineConfig.faceMaxHz;
-    const hairDue = this.activeHairFrameId === null
+    const faceDue = !this.faceBitmapCreationPending
+      && acquiredMs - this.lastFaceScheduledMs >= 1000 / initialEngineConfig.faceMaxHz;
+    const hairAnchor = this.latestLiveFace;
+    const hairDue = !this.hairBitmapCreationPending
+      && hairScheduler.queued === 0
+      && hairAnchor !== null
+      && Number.isFinite(hairAnchor.fitResidual)
+      && acquiredMs - hairAnchor.frame.acquiredMs <= initialEngineConfig.faceExpireMs
       && acquiredMs - this.lastHairCompletedMs >= 1000 / initialEngineConfig.hairMaxHz;
-    if (!faceDue && (!hairDue || scheduler.queued >= 2)) return;
-    const bitmapCreationSequence = ++this.bitmapCreationSequence;
-    this.bitmapCreationPending = true;
+    if (!faceDue && !hairDue) return;
+    const hairPoseAtSource = hairAnchor && this.previousLiveFace
+      && this.previousLiveFace.frame.generation === hairAnchor.frame.generation
+      ? predictSimilarityTransform(
+          this.previousLiveFace.sourceToFace,
+          hairAnchor.sourceToFace,
+          this.previousLiveFace.frame.acquiredMs,
+          hairAnchor.frame.acquiredMs,
+          acquiredMs,
+          1000 / initialEngineConfig.faceMaxHz,
+        )
+      : hairAnchor?.sourceToFace ?? null;
+    if (faceDue) {
+      this.faceBitmapCreationPending = true;
+      this.lastFaceScheduledMs = acquiredMs;
+      void this.captureLiveTask('face', video, faceScheduler, generation, acquiredMs, null);
+    }
+    if (hairDue) {
+      this.hairBitmapCreationPending = true;
+      void this.captureLiveTask('hair', video, hairScheduler, generation, acquiredMs, hairPoseAtSource);
+    }
+  }
+
+  private async captureLiveTask(
+    role: 'face' | 'hair',
+    video: HTMLVideoElement,
+    scheduler: LatestFrameScheduler<PerceptionFrame>,
+    generation: number,
+    acquiredMs: number,
+    poseAtSource: FaceSnapshot['sourceToFace'] | null,
+  ): Promise<void> {
+    const bitmapCreationSequence = this.bitmapCreationSequence;
+    let bitmap: ImageBitmap | null = null;
     try {
-      const scale = Math.min(1, initialEngineConfig.liveLongEdge / Math.max(video.videoWidth, video.videoHeight));
-      const bitmap = scale < 1
-        ? await createImageBitmap(video, {
-            resizeWidth: Math.max(1, Math.round(video.videoWidth * scale)),
-            resizeHeight: Math.max(1, Math.round(video.videoHeight * scale)),
-            resizeQuality: 'medium',
-          })
-        : await createImageBitmap(video);
+      bitmap = await createLiveBitmap(video);
       if (bitmapCreationSequence !== this.bitmapCreationSequence
         || this.snapshot.state !== 'LIVE' || this.snapshot.generation !== generation
-        || this.video !== video || this.scheduler !== scheduler) {
-        bitmap.close();
+        || this.video !== video
+        || (role === 'face' ? this.faceScheduler : this.hairScheduler) !== scheduler) {
         return;
       }
-      const runHair = this.activeHairFrameId === null
-        && performance.now() - this.lastHairCompletedMs >= 1000 / initialEngineConfig.hairMaxHz;
-      const runFace = faceDue || runHair;
-      if (!runFace) {
-        bitmap.close();
-        return;
-      }
-      if (runFace) this.lastFaceScheduledMs = acquiredMs;
       const kind = this.snapshot.sourceKind === 'replay' ? 'replay' : 'camera';
       const meta = this.createFrameMeta(kind, bitmap.width, bitmap.height, kind === 'camera', acquiredMs);
-      scheduler.submit({ bitmap, meta, runFace, runHair, close: () => bitmap.close() });
+      const ownedBitmap = bitmap;
+      bitmap = null;
+      scheduler.submit({ bitmap: ownedBitmap, meta, poseAtSource, close: () => ownedBitmap.close() });
+      this.diagnostics.increment(`${role}-frames-scheduled`);
       this.diagnostics.increment('frames-scheduled');
     } catch (error) {
       if (bitmapCreationSequence === this.bitmapCreationSequence) this.diagnostics.error('FRAME_ACQUIRE_FAILED');
       void error;
     } finally {
-      if (bitmapCreationSequence === this.bitmapCreationSequence) this.bitmapCreationPending = false;
+      bitmap?.close();
+      if (bitmapCreationSequence === this.bitmapCreationSequence) {
+        if (role === 'face') this.faceBitmapCreationPending = false;
+        else this.hairBitmapCreationPending = false;
+      }
     }
   }
 
-  private createLiveScheduler(timeoutMessage: string): LatestFrameScheduler<PerceptionFrame> {
-    return new LatestFrameScheduler(
-      (frame) => {
-        if (frame.runHair) this.activeHairFrameId = frame.meta.frameId;
-        return withTimeout(this.perception.analyze(frame), 15_000, timeoutMessage);
-      },
-      (error) => this.handleTaskError(error),
+  private createLiveSchedulers(timeoutMessage: string): void {
+    const generation = this.snapshot.generation;
+    const handleError = (error: unknown) => {
+      if (this.snapshot.generation === generation && this.snapshot.state === 'LIVE') this.handleTaskError(error);
+    };
+    this.faceScheduler = new LatestFrameScheduler(
+      (frame) => withTimeout(this.facePerception.analyze(frame), 15_000, `${timeoutMessage} (face)`),
+      handleError,
+    );
+    this.hairScheduler = new LatestFrameScheduler(
+      (frame) => withTimeout(this.hairPerception.analyze(frame), 15_000, `${timeoutMessage} (hair)`),
+      handleError,
     );
   }
 
@@ -417,11 +471,11 @@ export class BeautyController {
     };
   }
 
-  private handleWorkerMessage(message: WorkerResponse): void {
+  private handleWorkerMessage(role: 'face' | 'hair', message: WorkerResponse): void {
     if ('generation' in message && message.generation !== this.snapshot.generation) return;
     if (message.type === 'HAIR_RESULT' && message.result.frame.generation !== this.snapshot.generation) {
       const buffer = transferableBuffer(message.result.values);
-      if (buffer) this.perception.recycle(buffer);
+      if (buffer) this.hairPerception.recycle(buffer);
       return;
     }
     if ((message.type === 'FACE_RESULT' || message.type === 'FRAME_DONE')
@@ -429,12 +483,18 @@ export class BeautyController {
       return;
     }
     if (message.type === 'FACE_RESULT') {
+      if (message.result && message.result.frame.kind !== 'photo') {
+        this.previousLiveFace = this.latestLiveFace?.frame.generation === message.result.frame.generation
+          ? this.latestLiveFace
+          : null;
+        this.latestLiveFace = message.result;
+      }
       this.snapshot = { ...this.snapshot, face: message.result };
       this.diagnostics.increment(message.result ? 'face-results' : 'face-misses');
     } else if (message.type === 'HAIR_RESULT') {
       if (this.snapshot.sourceKind !== 'photo' && !message.result.poseAtSource) {
         const buffer = transferableBuffer(message.result.values);
-        if (buffer) this.perception.recycle(buffer);
+        if (buffer) this.hairPerception.recycle(buffer);
         this.diagnostics.increment('hair-unanchored-dropped');
         return;
       }
@@ -443,14 +503,12 @@ export class BeautyController {
       this.diagnostics.increment('hair-results');
       this.diagnostics.timing('hair-inference', message.result.inferenceMs);
       this.diagnostics.timing('hair-readback-copy', message.result.readbackAndCopyMs);
-      if (previousBuffer) this.perception.recycle(previousBuffer);
+      if (previousBuffer) this.hairPerception.recycle(previousBuffer);
     } else if (message.type === 'FRAME_DONE') {
-      if (message.frame.frameId === this.activeHairFrameId) {
-        this.activeHairFrameId = null;
-        this.lastHairCompletedMs = performance.now();
-      }
+      if (role === 'hair') this.lastHairCompletedMs = performance.now();
       this.diagnostics.timing('frame-total', performance.now() - message.frame.acquiredMs);
       this.diagnostics.increment('frames-completed');
+      this.diagnostics.increment(`${role}-frames-completed`);
     } else if (message.type === 'ERROR') {
       this.diagnostics.error(message.code);
       const code: EngineErrorCode = message.code === 'MODEL_MODE_FAILED'
@@ -461,13 +519,23 @@ export class BeautyController {
   }
 
   private bindPerception(): void {
-    this.perception.subscribe((message) => this.handleWorkerMessage(message));
+    this.facePerception.subscribe((message) => this.handleWorkerMessage('face', message));
+    this.hairPerception.subscribe((message) => this.handleWorkerMessage('hair', message));
   }
 
   private restartPerception(): void {
-    this.perception.dispose();
-    this.perception = new PerceptionClient();
+    this.facePerception.dispose();
+    this.hairPerception.dispose();
+    this.facePerception = new PerceptionClient('face');
+    this.hairPerception = new PerceptionClient('hair');
     this.bindPerception();
+  }
+
+  private setPerceptionMode(mode: 'IMAGE' | 'VIDEO', generation: number): Promise<void> {
+    return Promise.all([
+      this.facePerception.setMode(mode, generation),
+      this.hairPerception.setMode(mode, generation),
+    ]).then(() => undefined);
   }
 
   private handleTaskError(error: unknown): void {
@@ -517,6 +585,17 @@ async function createAnalysisBitmap(source: ImageBitmap): Promise<ImageBitmap> {
     resizeHeight: Math.max(1, Math.round(source.height * scale)),
     resizeQuality: 'high',
   });
+}
+
+function createLiveBitmap(video: HTMLVideoElement): Promise<ImageBitmap> {
+  const scale = Math.min(1, initialEngineConfig.liveLongEdge / Math.max(video.videoWidth, video.videoHeight));
+  return scale < 1
+    ? createImageBitmap(video, {
+        resizeWidth: Math.max(1, Math.round(video.videoWidth * scale)),
+        resizeHeight: Math.max(1, Math.round(video.videoHeight * scale)),
+        resizeQuality: 'medium',
+      })
+    : createImageBitmap(video);
 }
 
 function inputErrorCode(error: unknown): EngineErrorCode {

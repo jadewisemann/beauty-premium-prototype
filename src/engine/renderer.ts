@@ -28,6 +28,7 @@ export interface RenderOptions {
   hairFreshness: number;
   faceFreshness: number;
   currentFacePose: Mat3 | null;
+  facePoseAtSource: Mat3 | null;
   hairPoseAtSource: Mat3 | null;
   blush: BlushGeometry | null;
   splitCompare?: boolean;
@@ -310,6 +311,15 @@ export class BeautyRenderer {
       }
     }
     uniformMatrix3(gl, this.compositeProgram, 'uCurrentToHair', currentToHair);
+    let currentToFace = identityMat3();
+    if (options.currentFacePose && options.facePoseAtSource) {
+      try {
+        currentToFace = createCurrentToReferenceTransform(options.currentFacePose, options.facePoseAtSource);
+      } catch {
+        currentToFace = identityMat3();
+      }
+    }
+    uniformMatrix3(gl, this.compositeProgram, 'uCurrentToFace', currentToFace);
     uniform3f(gl, this.compositeProgram, 'uHairTarget', hexToRgb(recipe.hair.targetColor));
     uniform3f(gl, this.compositeProgram, 'uEyeTarget', hexToRgb(recipe.eye.targetColor));
     uniform3f(gl, this.compositeProgram, 'uLipTarget', hexToRgb(recipe.lip.targetColor));

@@ -19,6 +19,7 @@ test('analyzes a real photo, edits, compares, and exports', async ({ page }) => 
   await expect(page.getByLabel('뷰티 효과 미리보기')).toBeVisible();
 
   const completedMetric = diagnostics.locator('div').filter({ hasText: '프레임 완료' }).locator('dd');
+  await expect.poll(async () => Number(await completedMetric.innerText())).toBeGreaterThanOrEqual(2);
   const completedBeforeEdits = await completedMetric.innerText();
   await page.getByRole('button', { name: /Copper Glow/ }).click();
   await page.getByRole('button', { name: /Rose Brown/ }).click();

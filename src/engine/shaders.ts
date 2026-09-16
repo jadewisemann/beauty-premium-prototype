@@ -131,6 +131,7 @@ uniform bool uSplitCompare;
 uniform bool uMirror;
 uniform bool uOverlayOnly;
 uniform mat3 uCurrentToHair;
+uniform mat3 uCurrentToFace;
 uniform vec3 uHairTarget;
 uniform vec3 uEyeTarget;
 uniform vec3 uLipTarget;
@@ -227,6 +228,10 @@ void main() {
   hairUv = clamp(hairUv, 0.0, 1.0);
   float rawMask = texture(uRawMask, hairUv).r * hairUvValid;
   float refinedMask = texture(uRefinedMask, hairUv).r * hairUvValid;
+  vec3 mappedFace = uCurrentToFace * vec3(uv, 1.0);
+  vec2 faceUv = mappedFace.xy / max(mappedFace.z, 0.00001);
+  float faceUvValid = step(0.0, faceUv.x) * step(faceUv.x, 1.0) * step(0.0, faceUv.y) * step(faceUv.y, 1.0);
+  faceUv = clamp(faceUv, 0.0, 1.0);
   if (uView == 0) {
     outColor = vec4(sourceSrgb, 1.0);
     return;
@@ -266,7 +271,7 @@ void main() {
     linear = mix(linear, hairLinear, hairAlpha);
   }
 
-  vec2 eyeMask = texture(uEyeMask, uv).rg;
+  vec2 eyeMask = texture(uEyeMask, faceUv).rg * faceUvValid;
   float eyeHairClip = 1.0 - refinedMask * 0.9;
   float eyeShadowAlpha = clamp(eyeMask.r * eyeHairClip * uEyeShadowStrength * uFaceFreshness, 0.0, 0.5);
   if (eyeShadowAlpha > 0.001) {
@@ -286,7 +291,7 @@ void main() {
     linear = mix(linear, linerLinear, eyeLinerAlpha);
   }
 
-  float lipMask = texture(uLipMask, uv).r * uLipStrength * uFaceFreshness;
+  float lipMask = texture(uLipMask, faceUv).r * faceUvValid * uLipStrength * uFaceFreshness;
   if (lipMask > 0.001) {
     vec3 lipLab = linearToOklab(linear);
     vec3 lipTarget = linearToOklab(srgbToLinear(uLipTarget));
@@ -302,8 +307,8 @@ void main() {
     linear = mix(linear, lipLinear, lipAlpha);
   }
 
-  float blushMask = max(blushEllipse(uv, uBlushLeft, uBlushAngle), blushEllipse(uv, uBlushRight, uBlushAngle));
-  vec2 faceLocal = (uv - uFaceEllipse.xy) / max(uFaceEllipse.zw, vec2(0.0001));
+  float blushMask = max(blushEllipse(faceUv, uBlushLeft, uBlushAngle), blushEllipse(faceUv, uBlushRight, uBlushAngle)) * faceUvValid;
+  vec2 faceLocal = (faceUv - uFaceEllipse.xy) / max(uFaceEllipse.zw, vec2(0.0001));
   float faceClip = 1.0 - smoothstep(0.82, 1.05, dot(faceLocal, faceLocal));
   blushMask *= faceClip * (1.0 - refinedMask * 0.85) * (1.0 - lipMask) * uBlushStrength * uFaceFreshness;
   if (blushMask > 0.001) {

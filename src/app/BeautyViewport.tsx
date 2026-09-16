@@ -83,6 +83,9 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
       if (snapshot.generation !== trackingGeneration) {
         trackedFace = null;
         previousTrackedFace = null;
+        renderer.uploadLipMask(null);
+        renderer.uploadEyeMask(null);
+        blush = null;
         trackingGeneration = snapshot.generation;
       }
       const video = videoRef.current;
@@ -159,7 +162,7 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
             const eyeMask = createEyeMask(snapshot.face.landmarks);
             renderer.uploadEyeMask(eyeMask, eyeMask.width, eyeMask.height);
             blush = rendererBlush(snapshot.face.landmarks, propsRef.current.recipe.blush.size, propsRef.current.recipe.blush.placement);
-          } else {
+          } else if (snapshot.sourceKind === 'photo') {
             renderer.uploadLipMask(null);
             renderer.uploadEyeMask(null);
             blush = null;
@@ -167,18 +170,15 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
           lastFace = snapshot.face;
         }
         const blushKey = `${propsRef.current.recipe.blush.size}:${propsRef.current.recipe.blush.placement}`;
-        if (snapshot.face && lastBlushSize !== blushKey) {
-          blush = rendererBlush(snapshot.face.landmarks, propsRef.current.recipe.blush.size, propsRef.current.recipe.blush.placement);
+        const blushFace = snapshot.sourceKind === 'photo' ? snapshot.face : trackedFace;
+        if (blushFace && lastBlushSize !== blushKey) {
+          blush = rendererBlush(blushFace.landmarks, propsRef.current.recipe.blush.size, propsRef.current.recipe.blush.placement);
           lastBlushSize = blushKey;
         }
         const now = performance.now();
-        const faceAge = snapshot.face ? now - snapshot.face.frame.acquiredMs : Number.POSITIVE_INFINITY;
         const trackedFaceAge = trackedFace ? now - trackedFace.frame.acquiredMs : Number.POSITIVE_INFINITY;
         const hairAge = snapshot.hair ? now - snapshot.hair.frame.acquiredMs : Number.POSITIVE_INFINITY;
         const photo = snapshot.sourceKind === 'photo';
-        const faceFreshness = photo
-          ? (snapshot.face ? 1 : 0)
-          : freshnessAtAge(faceAge, initialEngineConfig.faceFadeStartMs, initialEngineConfig.faceExpireMs);
         const trackingFreshness = photo
           ? (trackedFace ? 1 : 0)
           : freshnessAtAge(trackedFaceAge, initialEngineConfig.faceFadeStartMs, initialEngineConfig.faceExpireMs);
@@ -197,6 +197,9 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
               )
             : trackedFace.sourceToFace)
           : null;
+        const facePoseAtSource = trackedFace && Number.isFinite(trackedFace.fitResidual)
+          ? trackedFace.sourceToFace
+          : null;
         const overlayOnly = !photo;
         canvas.style.opacity = overlayOnly && propsRef.current.view === 'original' ? '0' : '1';
         const metrics = renderer.render({
@@ -207,8 +210,9 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
           hairFreshness: photo
             ? (snapshot.hair ? 1 : 0)
             : freshnessAtAge(hairAge, initialEngineConfig.hairFadeStartMs, initialEngineConfig.hairExpireMs) * trackingFreshness,
-          faceFreshness,
+          faceFreshness: trackingFreshness,
           currentFacePose,
+          facePoseAtSource,
           hairPoseAtSource: snapshot.hair?.poseAtSource ?? null,
           blush,
           splitCompare: propsRef.current.splitCompare,

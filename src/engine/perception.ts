@@ -1,12 +1,11 @@
-import type { FrameMeta, WorkerRequest, WorkerResponse } from './contracts';
+import type { FrameMeta, Mat3, PerceptionRole, WorkerRequest, WorkerResponse } from './contracts';
 
 type ResponseListener = (message: WorkerResponse) => void;
 
 export interface PerceptionFrame {
   bitmap: ImageBitmap;
   meta: FrameMeta;
-  runFace: boolean;
-  runHair: boolean;
+  poseAtSource?: Mat3 | null;
   close(): void;
 }
 
@@ -18,7 +17,7 @@ export class PerceptionClient {
   private initRequest: { resolve(): void; reject(error: Error): void } | null = null;
   private requestId = 0;
 
-  constructor() {
+  constructor(private readonly role: PerceptionRole) {
     this.worker = new Worker(new URL('./perception.worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (event: MessageEvent<WorkerResponse>) => this.handle(event.data);
     this.worker.onerror = (event) => this.failAll(new Error(event.message || 'Perception worker failed'));
@@ -27,7 +26,7 @@ export class PerceptionClient {
   init(assetManifest = '/models/models.manifest.json'): Promise<void> {
     return new Promise((resolve, reject) => {
       this.initRequest = { resolve, reject };
-      this.post({ type: 'INIT', assetManifest });
+      this.post({ type: 'INIT', assetManifest, role: this.role });
     });
   }
 
@@ -47,8 +46,7 @@ export class PerceptionClient {
         type: 'FRAME',
         meta: frame.meta,
         bitmap: frame.bitmap,
-        runFace: frame.runFace || frame.runHair,
-        runHair: frame.runHair,
+        poseAtSource: frame.poseAtSource,
       }, [frame.bitmap]);
     });
   }

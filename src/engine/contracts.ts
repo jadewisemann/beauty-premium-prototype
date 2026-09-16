@@ -1,6 +1,7 @@
 /** Shared engine contracts. Source coordinates are upright, unmirrored UVs. */
 export type Region = 'hair' | 'eye' | 'lip' | 'blush';
 export type SourceKind = 'camera' | 'photo' | 'replay';
+export type PerceptionRole = 'face' | 'hair';
 
 /** A row-major homogeneous 2D transform. */
 export type Mat3 = readonly [
@@ -90,9 +91,9 @@ export interface LookRecipe {
 }
 
 export type WorkerRequest =
-  | { type: 'INIT'; assetManifest: string }
+  | { type: 'INIT'; assetManifest: string; role: PerceptionRole }
   | { type: 'SET_MODE'; requestId: number; mode: 'IMAGE' | 'VIDEO'; generation: number }
-  | { type: 'FRAME'; meta: FrameMeta; bitmap: ImageBitmap; runFace: boolean; runHair: boolean }
+  | { type: 'FRAME'; meta: FrameMeta; bitmap: ImageBitmap; poseAtSource?: Mat3 | null }
   | { type: 'RECYCLE_BUFFER'; buffer: ArrayBuffer }
   | { type: 'DISPOSE' };
 

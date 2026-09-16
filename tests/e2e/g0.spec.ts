@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+
+const liveFaceDataUrl = `data:image/png;base64,${readFileSync(new URL('../fixtures/face_model.png', import.meta.url)).toString('base64')}`;
 
 test.describe('G0 runtime', () => {
   test.setTimeout(120_000);
@@ -39,7 +42,7 @@ test.describe('G0 runtime', () => {
   });
 
   test('runs the bounded live camera path with a browser fixture stream', async ({ page }) => {
-    await page.addInitScript(() => {
+    await page.addInitScript((faceDataUrl) => {
       Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
         configurable: true,
         value: async () => {
@@ -47,18 +50,22 @@ test.describe('G0 runtime', () => {
           canvas.width = 640;
           canvas.height = 480;
           const context = canvas.getContext('2d')!;
+          const face = new Image();
+          face.src = faceDataUrl;
+          await face.decode();
           const paint = () => {
             context.fillStyle = '#ff0000';
             context.fillRect(0, 0, canvas.width, canvas.height / 2);
             context.fillStyle = '#0000ff';
             context.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2);
+            context.drawImage(face, 8, 88, 304, 304);
             requestAnimationFrame(paint);
           };
           paint();
           return canvas.captureStream(30);
         },
       });
-    });
+    }, liveFaceDataUrl);
     await page.goto('/?debug=1');
     await expectReady(page);
     await page.getByRole('button', { name: '동의하고 카메라 켜기' }).click();
@@ -66,7 +73,10 @@ test.describe('G0 runtime', () => {
     if (await page.locator('.state-pill').innerText() === '오류') throw new Error(await page.getByRole('alert').innerText());
     await expect(page.locator('.source-video')).toHaveCSS('opacity', '1');
     await expect(page.locator('.source-video')).toHaveClass(/source-video-mirrored/);
-    await expect.poll(async () => Number(await page.getByLabel('진단 정보').locator('div').filter({ hasText: '프레임 완료' }).locator('dd').innerText()), { timeout: 30_000 }).toBeGreaterThan(0);
+    const diagnostics = page.getByLabel('진단 정보');
+    await expect.poll(async () => Number(await diagnostics.locator('div').filter({ hasText: '프레임 완료' }).locator('dd').innerText()), { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect(diagnostics.locator('div').filter({ hasText: '얼굴 점' }).locator('dd')).toHaveText(/\d+/, { timeout: 30_000 });
+    await expect(diagnostics.locator('div').filter({ hasText: '헤어 마스크' }).locator('dd')).toHaveText(/\d+×\d+/, { timeout: 30_000 });
     await page.getByRole('button', { name: '원본', exact: true }).click();
     const preview = page.getByLabel('뷰티 효과 미리보기');
     await expect(preview).toHaveCSS('opacity', '0');

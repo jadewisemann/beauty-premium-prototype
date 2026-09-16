@@ -1,5 +1,5 @@
 import { FaceLandmarker, FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
-import type { FaceSnapshot, FrameMeta, HairSnapshot, Mat3, WorkerRequest, WorkerResponse } from './contracts';
+import type { FaceSnapshot, FrameMeta, HairSnapshot, Mat3, PerceptionRole, WorkerRequest, WorkerResponse } from './contracts';
 import { identityMat3 } from './transforms';
 
 interface AssetManifest {
@@ -22,6 +22,7 @@ const scope = globalThis as unknown as WorkerScope;
 let faceLandmarker: FaceLandmarker | null = null;
 let hairSegmenter: ImageSegmenter | null = null;
 let manifest: AssetManifest | null = null;
+let role: PerceptionRole | null = null;
 let currentGeneration = 0;
 let mode: 'IMAGE' | 'VIDEO' = 'IMAGE';
 const recycledBuffers: ArrayBuffer[] = [];
@@ -34,7 +35,7 @@ scope.onmessage = (event) => {
 async function handle(message: WorkerRequest): Promise<void> {
   switch (message.type) {
     case 'INIT':
-      await initialize(message.assetManifest);
+      await initialize(message.assetManifest, message.role);
       return;
     case 'SET_MODE':
       await setMode(message.mode, message.generation, message.requestId);
@@ -51,16 +52,17 @@ async function handle(message: WorkerRequest): Promise<void> {
   }
 }
 
-async function initialize(manifestUrl: string): Promise<void> {
+async function initialize(manifestUrl: string, nextRole: PerceptionRole): Promise<void> {
   const startedAt = performance.now();
   try {
+    role = nextRole;
     const response = await fetch(manifestUrl, { cache: 'no-cache' });
     if (!response.ok) throw new Error(`Asset manifest ${response.status}`);
     manifest = await response.json() as AssetManifest;
     if (manifest.schemaVersion !== 1) throw new Error('Unsupported asset manifest schema');
-    await createTasks('GPU').catch(async () => {
-      disposeTasks();
-      await createTasks('CPU');
+    await createTask('GPU').catch(async () => {
+      disposeTask();
+      await createTask('CPU');
     });
     post({ type: 'READY' });
   } catch (error) {
@@ -70,32 +72,31 @@ async function initialize(manifestUrl: string): Promise<void> {
   }
 }
 
-async function createTasks(delegate: 'GPU' | 'CPU'): Promise<void> {
-  if (!manifest) throw new Error('Asset manifest missing');
-  const faceModel = manifest.models.find((model) => model.id === 'face-landmarker');
-  const hairModel = manifest.models.find((model) => model.id === 'hair-segmenter');
-  if (!faceModel || !hairModel) throw new Error('Required model missing from manifest');
-  // Module-worker imports are cached. Each task needs a fresh loader execution
-  // because MediaPipe consumes and clears the global ModuleFactory after init.
-  const faceFileset = await workerFileset(manifest.wasm.directory, 'face');
-  const hairFileset = await workerFileset(manifest.wasm.directory, 'hair');
-  const faceCanvas = delegate === 'GPU' && 'OffscreenCanvas' in globalThis ? new OffscreenCanvas(1, 1) : undefined;
-  const hairCanvas = delegate === 'GPU' && 'OffscreenCanvas' in globalThis ? new OffscreenCanvas(1, 1) : undefined;
-  if (delegate === 'GPU' && (!faceCanvas || !hairCanvas)) throw new Error('OffscreenCanvas unavailable');
-  faceLandmarker = await FaceLandmarker.createFromOptions(faceFileset, {
-    baseOptions: { modelAssetPath: faceModel.localPath, delegate },
-    runningMode: mode,
-    numFaces: 1,
-    outputFaceBlendshapes: false,
-    outputFacialTransformationMatrixes: false,
-    ...(faceCanvas ? { canvas: faceCanvas } : {}),
-  });
-  hairSegmenter = await ImageSegmenter.createFromOptions(hairFileset, {
-    baseOptions: { modelAssetPath: hairModel.localPath, delegate },
+async function createTask(delegate: 'GPU' | 'CPU'): Promise<void> {
+  if (!manifest || !role) throw new Error('Worker configuration missing');
+  const modelId = role === 'face' ? 'face-landmarker' : 'hair-segmenter';
+  const model = manifest.models.find((candidate) => candidate.id === modelId);
+  if (!model) throw new Error(`Required ${role} model missing from manifest`);
+  const fileset = await workerFileset(manifest.wasm.directory, role);
+  const canvas = delegate === 'GPU' && 'OffscreenCanvas' in globalThis ? new OffscreenCanvas(1, 1) : undefined;
+  if (delegate === 'GPU' && !canvas) throw new Error('OffscreenCanvas unavailable');
+  if (role === 'face') {
+    faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: model.localPath, delegate },
+      runningMode: mode,
+      numFaces: 1,
+      outputFaceBlendshapes: false,
+      outputFacialTransformationMatrixes: false,
+      ...(canvas ? { canvas } : {}),
+    });
+    return;
+  }
+  hairSegmenter = await ImageSegmenter.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: model.localPath, delegate },
     runningMode: mode,
     outputConfidenceMasks: true,
     outputCategoryMask: false,
-    ...(hairCanvas ? { canvas: hairCanvas } : {}),
+    ...(canvas ? { canvas } : {}),
   });
   resolveHairChannel();
 }
@@ -109,10 +110,10 @@ async function workerFileset(directory: string, task: string) {
 async function setMode(nextMode: 'IMAGE' | 'VIDEO', generation: number, requestId: number): Promise<void> {
   currentGeneration = generation;
   try {
-    if (!faceLandmarker || !hairSegmenter) throw new Error('Models are not initialized');
+    if (!role || (role === 'face' ? !faceLandmarker : !hairSegmenter)) throw new Error('Model is not initialized');
     if (mode !== nextMode) {
-      await faceLandmarker.setOptions({ runningMode: nextMode });
-      await hairSegmenter.setOptions({ runningMode: nextMode });
+      if (role === 'face') await faceLandmarker?.setOptions({ runningMode: nextMode });
+      else await hairSegmenter?.setOptions({ runningMode: nextMode });
       mode = nextMode;
     }
     post({ type: 'MODE_READY', requestId, generation });
@@ -123,24 +124,26 @@ async function setMode(nextMode: 'IMAGE' | 'VIDEO', generation: number, requestI
 
 function runFrame(message: Extract<WorkerRequest, { type: 'FRAME' }>): void {
   const { bitmap, meta } = message;
-  let faceResult: FaceSnapshot | null = null;
   try {
-    if (!faceLandmarker || !hairSegmenter) throw new Error('Models are not initialized');
+    if (!role) throw new Error('Worker role is not initialized');
     if (meta.generation !== currentGeneration) return;
-    if (message.runFace || message.runHair) {
-      const result = mode === 'VIDEO'
-        ? faceLandmarker.detectForVideo(bitmap, meta.taskTimestampMs)
-        : faceLandmarker.detect(bitmap);
-      faceResult = toFaceSnapshot(result.faceLandmarks[0], meta);
-      post({ type: 'FACE_RESULT', result: faceResult, frame: meta }, faceResult ? [faceResult.landmarks.buffer] : []);
-    }
-    if (message.runHair) runHair(bitmap, meta, faceResult && Number.isFinite(faceResult.fitResidual) ? faceResult.sourceToFace : null);
+    if (role === 'face') runFace(bitmap, meta);
+    else runHair(bitmap, meta, message.poseAtSource ?? null);
   } catch (error) {
     postError('MODEL_INFERENCE_FAILED', error, meta.generation, meta.frameId);
   } finally {
     bitmap.close();
     post({ type: 'FRAME_DONE', frame: meta });
   }
+}
+
+function runFace(bitmap: ImageBitmap, frame: FrameMeta): void {
+  if (!faceLandmarker) throw new Error('Face landmarker is not initialized');
+  const result = mode === 'VIDEO'
+    ? faceLandmarker.detectForVideo(bitmap, frame.taskTimestampMs)
+    : faceLandmarker.detect(bitmap);
+  const snapshot = toFaceSnapshot(result.faceLandmarks[0], frame);
+  post({ type: 'FACE_RESULT', result: snapshot, frame }, snapshot ? [snapshot.landmarks.buffer] : []);
 }
 
 function runHair(bitmap: ImageBitmap, frame: FrameMeta, poseAtSource: Mat3 | null): void {
@@ -247,7 +250,7 @@ function postError(code: string, error: unknown, generation: number, frameId?: n
   });
 }
 
-function disposeTasks(): void {
+function disposeTask(): void {
   faceLandmarker?.close();
   hairSegmenter?.close();
   faceLandmarker = null;
@@ -255,6 +258,6 @@ function disposeTasks(): void {
 }
 
 function dispose(): void {
-  disposeTasks();
+  disposeTask();
   recycledBuffers.length = 0;
 }
