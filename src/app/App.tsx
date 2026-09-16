@@ -43,12 +43,17 @@ export function App() {
   const [rendererError, setRendererError] = useState<string | null>(null);
   const [format, setFormat] = useState<'png' | 'jpg'>('jpg');
   const [savedUrl, setSavedUrl] = useState<string | null>(null);
+  const [cameraConsentGiven, setCameraConsentGiven] = useState(false);
+  const [cameraLaunchPending, setCameraLaunchPending] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const recipe = history.present;
-  const unavailableError = snapshot.error && ['MODEL_INIT_FAILED', 'WORKER_FAILED', 'TIMEOUT', 'CONTEXT_LOST'].includes(snapshot.error.code);
+  const unavailableError = Boolean(snapshot.error && ['MODEL_INIT_FAILED', 'WORKER_FAILED', 'TIMEOUT', 'CONTEXT_LOST'].includes(snapshot.error.code));
   const ready = snapshot.state === 'READY' || snapshot.state === 'LIVE' || snapshot.state === 'PHOTO' || (snapshot.state === 'ERROR' && !unavailableError);
   const isLive = snapshot.state === 'LIVE' || snapshot.state === 'PAUSED';
+  const cameraInputError = snapshot.error?.code === 'CAMERA_DENIED' || snapshot.error?.code === 'CAMERA_UNAVAILABLE';
+  const showEntryOverlay = cameraLaunchPending || !snapshot.sourceKind || snapshot.state === 'REQUESTING_CAMERA' || cameraInputError;
+  const entryStep = cameraConsentGiven || cameraLaunchPending || snapshot.sourceKind === 'camera' ? 2 : 1;
 
   useEffect(() => {
     void controller.initialize();
@@ -67,9 +72,22 @@ export function App() {
 
   useEffect(() => () => { if (savedUrl) URL.revokeObjectURL(savedUrl); }, [savedUrl]);
 
+  useEffect(() => {
+    if (!cameraLaunchPending || !ready || !videoRef.current) return;
+    setCameraLaunchPending(false);
+    void controller.startCamera(videoRef.current);
+  }, [cameraLaunchPending, controller, ready]);
+
+  const requestCamera = () => {
+    setRendererError(null);
+    setCameraConsentGiven(true);
+    setCameraLaunchPending(true);
+  };
+
   const choosePhoto = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      setCameraLaunchPending(false);
       setCompare('none');
       void controller.selectPhoto(file);
     }
@@ -79,6 +97,7 @@ export function App() {
   const chooseReplay = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file && videoRef.current) {
+      setCameraLaunchPending(false);
       setCompare('none');
       void controller.startReplay(videoRef.current, file);
     }
@@ -120,7 +139,7 @@ export function App() {
     <main className="app-shell">
       <header className="topbar">
         <div><span className="eyebrow">BECON · PROTOTYPE</span><h1>Beauty Playground</h1></div>
-        <span className={`state-pill state-${snapshot.state.toLowerCase()}`}>{stateLabel(snapshot.state)}</span>
+        <span className={`state-pill state-${snapshot.state.toLowerCase()}`} role="status" aria-live="polite">{stateLabel(snapshot.state)}</span>
       </header>
 
       <section className={`stage-card ${compare === 'grid' && snapshot.state === 'PHOTO' ? 'stage-grid' : ''}`}>
@@ -135,50 +154,108 @@ export function App() {
         ) : (
           <BeautyViewport ref={canvasRef} controller={controller} videoRef={videoRef} recipe={recipe} view={displayedView} splitCompare={compare === 'split'} onRendererError={(message) => { setRendererError(message); controller.reportRendererError(message); }} onRendererRecovered={() => setRendererError(null)} onMetrics={updateMetrics} />
         )}
-        {!snapshot.sourceKind && <div className="empty-state"><span>사진 또는 카메라를 선택하세요</span><small>이미지와 분석 결과는 서버로 전송하지 않습니다.</small></div>}
+        {showEntryOverlay && (
+          <div className="entry-overlay">
+            <section className="entry-panel" role="dialog" aria-modal="true" aria-labelledby="entry-title">
+              <ol className="entry-steps" aria-label="체험 시작 단계">
+                <li className={entryStep === 1 ? 'current' : 'done'}><span>1</span>안내</li>
+                <li className={entryStep === 2 ? 'current' : ''}><span>2</span>권한</li>
+                <li><span>3</span>체험</li>
+              </ol>
+
+              {cameraInputError ? (
+                <div className="entry-copy">
+                  <span className="entry-kicker">STEP 2 · 카메라 권한</span>
+                  <h2 id="entry-title">{snapshot.error?.code === 'CAMERA_DENIED' ? '카메라 권한이 필요해요' : '카메라를 시작하지 못했어요'}</h2>
+                  <p>{snapshot.error?.code === 'CAMERA_DENIED' ? '브라우저 설정에서 카메라를 허용한 뒤 다시 요청해 주세요.' : '사용 가능한 전면 카메라를 확인하거나 사진으로 체험해 주세요.'}</p>
+                  <div className="entry-actions">
+                    <button className="primary-button" type="button" onClick={requestCamera}>카메라 다시 요청</button>
+                    <label className="secondary-button file-button">사진으로 체험<input type="file" accept="image/jpeg,image/png,image/webp" onChange={choosePhoto} disabled={!ready} /></label>
+                  </div>
+                </div>
+              ) : snapshot.state === 'REQUESTING_CAMERA' ? (
+                <div className="entry-loading" role="status" aria-live="polite">
+                  <span className="entry-spinner" aria-hidden="true" />
+                  <h2 id="entry-title">브라우저의 카메라 권한을 확인해 주세요</h2>
+                  <p>허용을 누르면 실시간 미리보기가 바로 시작돼요.</p>
+                </div>
+              ) : cameraLaunchPending ? (
+                unavailableError ? (
+                  <div className="entry-copy">
+                    <span className="entry-kicker">준비 오류</span>
+                    <h2 id="entry-title">체험 엔진을 준비하지 못했어요</h2>
+                    <p>엔진을 다시 불러온 뒤 카메라 권한 요청을 이어갈게요.</p>
+                    <button className="primary-button" type="button" onClick={() => { setRendererError(null); void controller.retry(); }}>엔진 다시 불러오기</button>
+                  </div>
+                ) : (
+                  <div className="entry-loading" role="status" aria-live="polite">
+                    <span className="entry-spinner" aria-hidden="true" />
+                    <h2 id="entry-title">체험 엔진을 준비하고 있어요</h2>
+                    <p>준비가 끝나면 카메라 권한을 바로 요청할게요.</p>
+                  </div>
+                )
+              ) : (
+                <div className="entry-copy">
+                  <span className="entry-kicker">STEP 1 · 카메라 사용 안내</span>
+                  <h2 id="entry-title">전면 카메라로 얼굴을 비춰도 될까요?</h2>
+                  <p>헤어·립·블러셔 효과를 실시간으로 보여주기 위해 카메라를 사용합니다.</p>
+                  <div className="privacy-note"><strong>기기 안에서만 처리해요</strong><span>얼굴 이미지와 분석 결과를 서버로 전송하거나 저장하지 않습니다.</span></div>
+                  <div className="entry-actions">
+                    <button className="primary-button" type="button" disabled={unavailableError} onClick={requestCamera}>동의하고 카메라 켜기</button>
+                    <label className="secondary-button file-button">사진으로 대신 시작<input type="file" accept="image/jpeg,image/png,image/webp" onChange={choosePhoto} disabled={!ready} /></label>
+                  </div>
+                  <small className={`model-status ${ready ? 'ready' : ''}`}><span />{ready ? '체험 엔진 준비 완료' : '체험 엔진을 백그라운드에서 준비 중'}</small>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
         {snapshot.state === 'ANALYZING_PHOTO' && <div className="stage-message">사진 정밀 적용 중…</div>}
+        {snapshot.state === 'LIVE' && !snapshot.face && !snapshot.hair && <div className="stage-message live-guide"><span className="entry-spinner" aria-hidden="true" />얼굴을 화면 중앙에 맞춰 주세요 · 분석 중</div>}
         {snapshot.state === 'PHOTO' && !snapshot.face && snapshot.hair && <div className="stage-message">얼굴 미검출 · 헤어만 적용됩니다.</div>}
         {snapshot.state === 'PHOTO' && snapshot.face && !snapshot.hair && <div className="stage-message">헤어 미검출 · 립과 블러셔만 적용됩니다.</div>}
         {snapshot.state === 'PHOTO' && !snapshot.face && !snapshot.hair && <div className="stage-message">적용 가능한 얼굴·헤어 결과를 찾지 못했습니다.</div>}
         {compare === 'split' && snapshot.sourceKind && <div className="split-labels"><span>원본</span><span>적용</span></div>}
       </section>
 
-      <section className="source-controls" aria-label="입력 선택">
-        <button className="primary-button" type="button" disabled={!ready || snapshot.state === 'LOADING_MODELS'} onClick={() => videoRef.current && void controller.startCamera(videoRef.current)}>카메라</button>
-        <label className="secondary-button file-button">사진<input type="file" accept="image/jpeg,image/png,image/webp" onChange={choosePhoto} disabled={!ready} /></label>
-        <label className="text-button file-button">반복 영상<input type="file" accept="video/*" onChange={chooseReplay} disabled={!ready} /></label>
-      </section>
-
-      <section className="quick-actions" aria-label="비교 및 촬영">
-        <button type="button" className={originalHeld ? 'active' : ''} disabled={!snapshot.sourceKind} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setOriginalHeld(true); }} onPointerUp={() => setOriginalHeld(false)} onPointerCancel={() => setOriginalHeld(false)} onLostPointerCapture={() => setOriginalHeld(false)}>원본 홀드</button>
-        <button type="button" disabled={!snapshot.sourceKind} className={compare === 'split' ? 'active' : ''} onClick={() => setCompare(compare === 'split' ? 'none' : 'split')}>2분할</button>
-        <button type="button" disabled={snapshot.state !== 'PHOTO'} className={compare === 'grid' ? 'active' : ''} onClick={() => setCompare(compare === 'grid' ? 'none' : 'grid')}>4분할</button>
-        <button type="button" disabled={!isLive} onClick={() => videoRef.current && void controller.captureFrame(videoRef.current, recipe.revision)}>촬영</button>
-      </section>
-
-      <nav className="view-switcher" aria-label="개발 보기">
-        {viewOptions.map((option) => <button key={option.id} type="button" className={view === option.id ? 'active' : ''} onClick={() => setView(option.id)}>{option.label}</button>)}
-      </nav>
-
-      <nav className="beauty-tabs" aria-label="효과 편집">
-        {(['looks', 'hair', 'lip', 'blush'] as const).map((item) => <button key={item} type="button" className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{tabLabel(item)}</button>)}
-      </nav>
-
-      <section className="editor-card">
-        {tab === 'looks' && <LookEditor recipe={recipe} locks={locks} onLock={(region) => setLocks((current) => ({ ...current, [region]: !current[region] }))} onSelect={selectPreset} />}
-        {tab === 'hair' && <RegionEditor region="hair" recipe={recipe} colors={HAIR_COLORS} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
-        {tab === 'lip' && <RegionEditor region="lip" recipe={recipe} colors={LIP_COLORS} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
-        {tab === 'blush' && <RegionEditor region="blush" recipe={recipe} colors={BLUSH_PALETTES.flat()} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
-        <div className="history-actions"><button type="button" disabled={!history.past.length} onClick={() => setHistory(undoRecipe)}>실행 취소</button><button type="button" disabled={!history.future.length} onClick={() => setHistory(redoRecipe)}>다시 실행</button></div>
-      </section>
-
-      {snapshot.state === 'PHOTO' && (
-        <section className="save-card">
-          <div className="format-switch"><button className={format === 'jpg' ? 'active' : ''} onClick={() => setFormat('jpg')}>JPEG</button><button className={format === 'png' ? 'active' : ''} onClick={() => setFormat('png')}>PNG</button></div>
-          <button className="primary-button" type="button" disabled={compare === 'grid'} onClick={() => void save()}>결과 저장</button>
-          {savedUrl && <a href={savedUrl} target="_blank" rel="noreferrer">다운로드가 막히면 새 이미지로 열기</a>}
+      {snapshot.sourceKind && <>
+        <section className="source-controls" aria-label="입력 선택">
+          <button className="primary-button" type="button" disabled={!ready || snapshot.state === 'LOADING_MODELS'} onClick={requestCamera}>카메라</button>
+          <label className="secondary-button file-button">사진<input type="file" accept="image/jpeg,image/png,image/webp" onChange={choosePhoto} disabled={!ready} /></label>
+          <label className="text-button file-button">반복 영상<input type="file" accept="video/*" onChange={chooseReplay} disabled={!ready} /></label>
         </section>
-      )}
+
+        <section className="quick-actions" aria-label="비교 및 촬영">
+          <button type="button" className={originalHeld ? 'active' : ''} disabled={!snapshot.sourceKind} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setOriginalHeld(true); }} onPointerUp={() => setOriginalHeld(false)} onPointerCancel={() => setOriginalHeld(false)} onLostPointerCapture={() => setOriginalHeld(false)}>원본 홀드</button>
+          <button type="button" disabled={!snapshot.sourceKind} className={compare === 'split' ? 'active' : ''} onClick={() => setCompare(compare === 'split' ? 'none' : 'split')}>2분할</button>
+          <button type="button" disabled={snapshot.state !== 'PHOTO'} className={compare === 'grid' ? 'active' : ''} onClick={() => setCompare(compare === 'grid' ? 'none' : 'grid')}>4분할</button>
+          <button type="button" disabled={!isLive} onClick={() => videoRef.current && void controller.captureFrame(videoRef.current, recipe.revision)}>촬영</button>
+        </section>
+
+        <nav className="view-switcher" aria-label="개발 보기">
+          {viewOptions.map((option) => <button key={option.id} type="button" className={view === option.id ? 'active' : ''} onClick={() => setView(option.id)}>{option.label}</button>)}
+        </nav>
+
+        <nav className="beauty-tabs" aria-label="효과 편집">
+          {(['looks', 'hair', 'lip', 'blush'] as const).map((item) => <button key={item} type="button" className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{tabLabel(item)}</button>)}
+        </nav>
+
+        <section className="editor-card">
+          {tab === 'looks' && <LookEditor recipe={recipe} locks={locks} onLock={(region) => setLocks((current) => ({ ...current, [region]: !current[region] }))} onSelect={selectPreset} />}
+          {tab === 'hair' && <RegionEditor region="hair" recipe={recipe} colors={HAIR_COLORS} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
+          {tab === 'lip' && <RegionEditor region="lip" recipe={recipe} colors={LIP_COLORS} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
+          {tab === 'blush' && <RegionEditor region="blush" recipe={recipe} colors={BLUSH_PALETTES.flat()} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
+          <div className="history-actions"><button type="button" disabled={!history.past.length} onClick={() => setHistory(undoRecipe)}>실행 취소</button><button type="button" disabled={!history.future.length} onClick={() => setHistory(redoRecipe)}>다시 실행</button></div>
+        </section>
+
+        {snapshot.state === 'PHOTO' && (
+          <section className="save-card">
+            <div className="format-switch"><button className={format === 'jpg' ? 'active' : ''} onClick={() => setFormat('jpg')}>JPEG</button><button className={format === 'png' ? 'active' : ''} onClick={() => setFormat('png')}>PNG</button></div>
+            <button className="primary-button" type="button" disabled={compare === 'grid'} onClick={() => void save()}>결과 저장</button>
+            {savedUrl && <a href={savedUrl} target="_blank" rel="noreferrer">다운로드가 막히면 새 이미지로 열기</a>}
+          </section>
+        )}
+      </>}
 
       {(snapshot.error || rendererError) && (
         <section className="error-card" role="alert">
@@ -189,7 +266,7 @@ export function App() {
         </section>
       )}
 
-      <DiagnosticsPanel controller={snapshot} diagnostics={diagnostics} onDownload={() => controller.diagnostics.download()} />
+      {snapshot.sourceKind && <DiagnosticsPanel controller={snapshot} diagnostics={diagnostics} onDownload={() => controller.diagnostics.download()} />}
     </main>
   );
 }
