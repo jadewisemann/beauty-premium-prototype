@@ -134,7 +134,7 @@ function runFrame(message: Extract<WorkerRequest, { type: 'FRAME' }>): void {
       faceResult = toFaceSnapshot(result.faceLandmarks[0], meta);
       post({ type: 'FACE_RESULT', result: faceResult, frame: meta }, faceResult ? [faceResult.landmarks.buffer] : []);
     }
-    if (message.runHair) runHair(bitmap, meta, faceResult?.sourceToFace ?? null);
+    if (message.runHair) runHair(bitmap, meta, faceResult && Number.isFinite(faceResult.fitResidual) ? faceResult.sourceToFace : null);
   } catch (error) {
     postError('MODEL_INFERENCE_FAILED', error, meta.generation, meta.frameId);
   } finally {

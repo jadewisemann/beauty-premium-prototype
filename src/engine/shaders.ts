@@ -125,10 +125,14 @@ uniform sampler2D uRawMask;
 uniform sampler2D uRefinedMask;
 uniform sampler2D uLargeLuma;
 uniform sampler2D uLipMask;
+uniform sampler2D uEyeMask;
 uniform int uView;
 uniform bool uSplitCompare;
 uniform bool uMirror;
+uniform bool uOverlayOnly;
+uniform mat3 uCurrentToHair;
 uniform vec3 uHairTarget;
+uniform vec3 uEyeTarget;
 uniform vec3 uLipTarget;
 uniform vec3 uBlushTarget;
 uniform float uHairStrength;
@@ -139,8 +143,10 @@ uniform float uDetailLimit;
 uniform float uHighlightProtect;
 uniform float uEdgeStrength;
 uniform float uHairFreshness;
+uniform float uEyeShadowStrength;
+uniform float uEyeLinerStrength;
 uniform float uLipStrength;
-uniform float uLipSatin;
+uniform int uLipFinish;
 uniform float uFaceFreshness;
 uniform float uBlushStrength;
 uniform vec4 uBlushLeft;
@@ -215,8 +221,12 @@ float blushEllipse(vec2 uv, vec4 ellipse, float angle) {
 void main() {
   vec2 uv = vec2(uMirror ? 1.0 - vUv.x : vUv.x, vUv.y);
   vec3 sourceSrgb = texture(uSource, uv).rgb;
-  float rawMask = texture(uRawMask, uv).r;
-  float refinedMask = texture(uRefinedMask, uv).r;
+  vec3 mappedHair = uCurrentToHair * vec3(uv, 1.0);
+  vec2 hairUv = mappedHair.xy / max(mappedHair.z, 0.00001);
+  float hairUvValid = step(0.0, hairUv.x) * step(hairUv.x, 1.0) * step(0.0, hairUv.y) * step(hairUv.y, 1.0);
+  hairUv = clamp(hairUv, 0.0, 1.0);
+  float rawMask = texture(uRawMask, hairUv).r * hairUvValid;
+  float refinedMask = texture(uRefinedMask, hairUv).r * hairUvValid;
   if (uView == 0) {
     outColor = vec4(sourceSrgb, 1.0);
     return;
@@ -230,33 +240,66 @@ void main() {
     return;
   }
   if (uSplitCompare && vUv.x < 0.5) {
-    outColor = vec4(sourceSrgb, 1.0);
+    outColor = uOverlayOnly ? vec4(0.0) : vec4(sourceSrgb, 1.0);
     return;
   }
 
   vec3 linear = srgbToLinear(sourceSrgb);
+  vec3 overlayPremultiplied = vec3(0.0);
+  float overlayAlpha = 0.0;
   float luminance = max(dot(linear, vec3(0.2126, 0.7152, 0.0722)), 0.003);
-  float logLuminance = log2(luminance);
-  float base = texture(uLargeLuma, uv).r * 16.0 - 12.0;
-  float detail = clamp(logLuminance - base, -uDetailLimit, uDetailLimit);
-  float newLogLuminance = base + uHairLiftStops + uDetailKeep * detail;
-  vec3 scaled = linear * (exp2(newLogLuminance) / luminance);
-  vec3 hairLab = linearToOklab(max(scaled, vec3(0.0)));
-  vec3 targetLab = linearToOklab(srgbToLinear(uHairTarget));
-  float highlight = smoothstep(0.55, 1.0, hairLab.x) * uHighlightProtect;
-  hairLab.yz = mix(hairLab.yz, targetLab.yz, uHairChromaMix * (1.0 - highlight));
-  vec3 hairLinear = gamutMap(hairLab);
   float edge = mix(uEdgeStrength, 1.0, smoothstep(0.4, 0.9, refinedMask));
-  float hairAlpha = refinedMask * edge * uHairStrength * uHairFreshness;
-  linear = mix(linear, hairLinear, clamp(hairAlpha, 0.0, 1.0));
+  float hairAlpha = clamp(refinedMask * edge * uHairStrength * uHairFreshness, 0.0, 1.0);
+  if (hairAlpha > 0.001) {
+    float logLuminance = log2(luminance);
+    float base = texture(uLargeLuma, hairUv).r * 16.0 - 12.0;
+    float detail = clamp(logLuminance - base, -uDetailLimit, uDetailLimit);
+    float newLogLuminance = base + uHairLiftStops + uDetailKeep * detail;
+    vec3 scaled = linear * (exp2(newLogLuminance) / luminance);
+    vec3 hairLab = linearToOklab(max(scaled, vec3(0.0)));
+    vec3 targetLab = linearToOklab(srgbToLinear(uHairTarget));
+    float highlight = smoothstep(0.55, 1.0, hairLab.x) * uHighlightProtect;
+    hairLab.yz = mix(hairLab.yz, targetLab.yz, uHairChromaMix * (1.0 - highlight));
+    vec3 hairLinear = gamutMap(hairLab);
+    overlayPremultiplied = hairLinear * hairAlpha + overlayPremultiplied * (1.0 - hairAlpha);
+    overlayAlpha = hairAlpha + overlayAlpha * (1.0 - hairAlpha);
+    linear = mix(linear, hairLinear, hairAlpha);
+  }
+
+  vec2 eyeMask = texture(uEyeMask, uv).rg;
+  float eyeHairClip = 1.0 - refinedMask * 0.9;
+  float eyeShadowAlpha = clamp(eyeMask.r * eyeHairClip * uEyeShadowStrength * uFaceFreshness, 0.0, 0.5);
+  if (eyeShadowAlpha > 0.001) {
+    vec3 eyeLab = linearToOklab(linear);
+    vec3 eyeTarget = linearToOklab(srgbToLinear(uEyeTarget));
+    eyeLab.yz = mix(eyeLab.yz, eyeTarget.yz, 0.72);
+    vec3 eyeLinear = gamutMap(eyeLab);
+    overlayPremultiplied = eyeLinear * eyeShadowAlpha + overlayPremultiplied * (1.0 - eyeShadowAlpha);
+    overlayAlpha = eyeShadowAlpha + overlayAlpha * (1.0 - eyeShadowAlpha);
+    linear = mix(linear, eyeLinear, eyeShadowAlpha);
+  }
+  float eyeLinerAlpha = clamp(eyeMask.g * eyeHairClip * uEyeLinerStrength * uFaceFreshness, 0.0, 0.72);
+  if (eyeLinerAlpha > 0.001) {
+    vec3 linerLinear = srgbToLinear(mix(uEyeTarget, vec3(0.035), 0.72));
+    overlayPremultiplied = linerLinear * eyeLinerAlpha + overlayPremultiplied * (1.0 - eyeLinerAlpha);
+    overlayAlpha = eyeLinerAlpha + overlayAlpha * (1.0 - eyeLinerAlpha);
+    linear = mix(linear, linerLinear, eyeLinerAlpha);
+  }
 
   float lipMask = texture(uLipMask, uv).r * uLipStrength * uFaceFreshness;
   if (lipMask > 0.001) {
     vec3 lipLab = linearToOklab(linear);
     vec3 lipTarget = linearToOklab(srgbToLinear(uLipTarget));
-    lipLab.yz = mix(lipLab.yz, lipTarget.yz, 0.82);
-    lipLab.x = clamp(lipLab.x + (lipLab.x - 0.5) * 0.08 * uLipSatin, 0.0, 1.0);
-    linear = mix(linear, gamutMap(lipLab), clamp(lipMask, 0.0, 1.0));
+    float lipChroma = uLipFinish == 2 ? 0.9 : 0.82;
+    lipLab.yz = mix(lipLab.yz, lipTarget.yz, lipChroma);
+    if (uLipFinish == 1) lipLab.x = clamp(lipLab.x + (lipLab.x - 0.5) * 0.08, 0.0, 1.0);
+    if (uLipFinish == 2) lipLab.x = mix(lipLab.x, lipTarget.x, 0.08);
+    if (uLipFinish == 3) lipLab.x = clamp(lipLab.x + 0.04 + smoothstep(0.45, 0.8, luminance) * 0.08, 0.0, 1.0);
+    float lipAlpha = clamp(lipMask, 0.0, 1.0);
+    vec3 lipLinear = gamutMap(lipLab);
+    overlayPremultiplied = lipLinear * lipAlpha + overlayPremultiplied * (1.0 - lipAlpha);
+    overlayAlpha = lipAlpha + overlayAlpha * (1.0 - lipAlpha);
+    linear = mix(linear, lipLinear, lipAlpha);
   }
 
   float blushMask = max(blushEllipse(uv, uBlushLeft, uBlushAngle), blushEllipse(uv, uBlushRight, uBlushAngle));
@@ -267,9 +310,18 @@ void main() {
     vec3 blushLab = linearToOklab(linear);
     vec3 blushTarget = linearToOklab(srgbToLinear(uBlushTarget));
     blushLab.yz = mix(blushLab.yz, blushTarget.yz, 0.55);
-    linear = mix(linear, gamutMap(blushLab), clamp(blushMask, 0.0, 0.45));
+    float blushAlpha = clamp(blushMask, 0.0, 0.45);
+    vec3 blushLinear = gamutMap(blushLab);
+    overlayPremultiplied = blushLinear * blushAlpha + overlayPremultiplied * (1.0 - blushAlpha);
+    overlayAlpha = blushAlpha + overlayAlpha * (1.0 - blushAlpha);
+    linear = mix(linear, blushLinear, blushAlpha);
   }
 
-  outColor = vec4(linearToSrgb(linear), 1.0);
+  if (uOverlayOnly) {
+    vec3 overlayLinear = overlayPremultiplied / max(overlayAlpha, 0.00001);
+    outColor = vec4(linearToSrgb(overlayLinear), overlayAlpha);
+  } else {
+    outColor = vec4(linearToSrgb(linear), 1.0);
+  }
 }
 `;

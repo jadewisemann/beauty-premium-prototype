@@ -19,16 +19,16 @@ export interface EngineConfig {
 
 /** Initial G0 operating values, tuned to keep camera rendering ahead of ML inference. */
 export const initialEngineConfig = {
-  liveLongEdge: 960,
+  liveLongEdge: 640,
   photoAnalysisLongEdge: 1536,
   exportLongEdgeMax: 2048,
-  faceMaxHz: 12,
-  hairMaxHz: 3,
+  faceMaxHz: 15,
+  hairMaxHz: 2,
   maskWorkingLongEdge: 256,
   faceFadeStartMs: 150,
   faceExpireMs: 300,
-  hairFadeStartMs: 450,
-  hairExpireMs: 800,
+  hairFadeStartMs: 700,
+  hairExpireMs: 1200,
   stationaryTauMs: 100,
   movingTauMs: 40,
   maxHistoryWeight: 0.8,

@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test.describe('G0 runtime', () => {
   test.setTimeout(120_000);
   test('loads the perception worker and reaches ready', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?debug=1');
 
     const entry = page.getByRole('dialog', { name: '전면 카메라로 얼굴을 비춰도 될까요?' });
     await expect(entry).toBeVisible();
@@ -27,7 +27,7 @@ test.describe('G0 runtime', () => {
         },
       });
     });
-    await page.goto('/');
+    await page.goto('/?debug=1');
 
     await page.getByRole('button', { name: '동의하고 카메라 켜기' }).click();
     await expect(page.getByText('체험 엔진을 준비하고 있어요')).toBeVisible();
@@ -59,14 +59,17 @@ test.describe('G0 runtime', () => {
         },
       });
     });
-    await page.goto('/');
+    await page.goto('/?debug=1');
     await expectReady(page);
     await page.getByRole('button', { name: '동의하고 카메라 켜기' }).click();
     await expect(page.locator('.state-pill')).toHaveText(/라이브|오류/, { timeout: 30_000 });
     if (await page.locator('.state-pill').innerText() === '오류') throw new Error(await page.getByRole('alert').innerText());
+    await expect(page.locator('.source-video')).toHaveCSS('opacity', '1');
+    await expect(page.locator('.source-video')).toHaveClass(/source-video-mirrored/);
     await expect.poll(async () => Number(await page.getByLabel('진단 정보').locator('div').filter({ hasText: '프레임 완료' }).locator('dd').innerText()), { timeout: 30_000 }).toBeGreaterThan(0);
     await page.getByRole('button', { name: '원본', exact: true }).click();
     const preview = page.getByLabel('뷰티 효과 미리보기');
+    await expect(preview).toHaveCSS('opacity', '0');
     await expect(preview.evaluate(async (canvas: HTMLCanvasElement) => {
       const gl = canvas.getContext('webgl2')!;
       for (let attempt = 0; attempt < 120; attempt += 1) {

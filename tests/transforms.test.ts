@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyMat3,
+  createCurrentToReferenceTransform,
   createSourceToDisplayTransform,
   invertMat3,
   multiplyMat3,
@@ -61,5 +62,12 @@ describe('source coordinate transforms', () => {
     const source = { x: 0.173, y: 0.814 };
     expectPoint(applyMat3(invertMat3(transform), applyMat3(transform, source)), source);
     expectPoint(applyMat3(multiplyMat3(invertMat3(transform), transform), source), source);
+  });
+
+  it('reprojects the current face position into a reference frame', () => {
+    const referenceToFace = [2, 0, -1, 0, 2, -1, 0, 0, 1] as const;
+    const currentToFace = [2, 0, -1.4, 0, 2, -1, 0, 0, 1] as const;
+    const currentFaceCenter = { x: 0.7, y: 0.5 };
+    expectPoint(applyMat3(createCurrentToReferenceTransform(currentToFace, referenceToFace), currentFaceCenter), { x: 0.5, y: 0.5 });
   });
 });

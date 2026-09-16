@@ -3,7 +3,7 @@ import type { RefObject } from 'react';
 import { initialEngineConfig } from '../engine/config';
 import type { BeautyController } from '../engine/controller';
 import type { LookRecipe } from '../engine/contracts';
-import { blushEllipses, drawLipMask } from '../engine/masks';
+import { blushEllipses, drawEyeMakeupMask, drawLipMask } from '../engine/masks';
 import { BeautyRenderer, type RenderView, type RendererMetrics } from '../engine/renderer';
 import { freshnessAtAge } from '../engine/temporal';
 
@@ -52,7 +52,7 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
     let resizePending = '';
     let lastHair: unknown = null;
     let lastFace: unknown = null;
-    let lastBlushSize = Number.NaN;
+    let lastBlushSize: number | string = Number.NaN;
     let blush: ReturnType<typeof rendererBlush> | null = null;
     let lastMetricsAt = 0;
     try {
@@ -142,27 +142,36 @@ export const BeautyViewport = forwardRef<HTMLCanvasElement, Props>(function Beau
           if (snapshot.face) {
             const mask = createLipMask(snapshot.face.landmarks);
             renderer.uploadLipMask(mask, mask.width, mask.height);
-            blush = rendererBlush(snapshot.face.landmarks, propsRef.current.recipe.blush.size);
+            const eyeMask = createEyeMask(snapshot.face.landmarks);
+            renderer.uploadEyeMask(eyeMask, eyeMask.width, eyeMask.height);
+            blush = rendererBlush(snapshot.face.landmarks, propsRef.current.recipe.blush.size, propsRef.current.recipe.blush.placement);
           } else {
             renderer.uploadLipMask(null);
+            renderer.uploadEyeMask(null);
             blush = null;
           }
           lastFace = snapshot.face;
         }
-        if (snapshot.face && lastBlushSize !== propsRef.current.recipe.blush.size) {
-          blush = rendererBlush(snapshot.face.landmarks, propsRef.current.recipe.blush.size);
-          lastBlushSize = propsRef.current.recipe.blush.size;
+        const blushKey = `${propsRef.current.recipe.blush.size}:${propsRef.current.recipe.blush.placement}`;
+        if (snapshot.face && lastBlushSize !== blushKey) {
+          blush = rendererBlush(snapshot.face.landmarks, propsRef.current.recipe.blush.size, propsRef.current.recipe.blush.placement);
+          lastBlushSize = blushKey;
         }
         const now = performance.now();
         const faceAge = snapshot.face ? now - snapshot.face.frame.acquiredMs : Number.POSITIVE_INFINITY;
         const hairAge = snapshot.hair ? now - snapshot.hair.frame.acquiredMs : Number.POSITIVE_INFINITY;
         const photo = snapshot.sourceKind === 'photo';
+        const overlayOnly = !photo;
+        canvas.style.opacity = overlayOnly && propsRef.current.view === 'original' ? '0' : '1';
         const metrics = renderer.render({
           view: propsRef.current.view,
           mirror: snapshot.sourceKind === 'camera',
+          overlayOnly,
           recipe: propsRef.current.recipe,
           hairFreshness: photo ? (snapshot.hair ? 1 : 0) : freshnessAtAge(hairAge, initialEngineConfig.hairFadeStartMs, initialEngineConfig.hairExpireMs),
           faceFreshness: photo ? (snapshot.face ? 1 : 0) : freshnessAtAge(faceAge, initialEngineConfig.faceFadeStartMs, initialEngineConfig.faceExpireMs),
+          currentFacePose: snapshot.face && Number.isFinite(snapshot.face.fitResidual) ? snapshot.face.sourceToFace : null,
+          hairPoseAtSource: snapshot.hair?.poseAtSource ?? null,
           blush,
           splitCompare: propsRef.current.splitCompare,
         });
@@ -211,8 +220,21 @@ function createLipMask(landmarks: Float32Array): HTMLCanvasElement {
   return canvas;
 }
 
-function rendererBlush(landmarks: Float32Array, size: number) {
-  const [left, right] = blushEllipses(landmarks, size);
+function createEyeMask(landmarks: Float32Array): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext('2d');
+  if (!context) return canvas;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.setTransform(canvas.width, 0, 0, canvas.height, 0, 0);
+  drawEyeMakeupMask(context, landmarks);
+  context.resetTransform();
+  return canvas;
+}
+
+function rendererBlush(landmarks: Float32Array, size: number, placement: LookRecipe['blush']['placement']) {
+  const [left, right] = blushEllipses(landmarks, size, placement);
   let minX = 1, minY = 1, maxX = 0, maxY = 0;
   for (let index = 0; index < landmarks.length; index += 3) {
     const x = landmarks[index];

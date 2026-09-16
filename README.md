@@ -1,6 +1,6 @@
 # BECON Beauty Playground
 
-사진과 전면 카메라에서 헤어·립·블러셔를 로컬 합성하는 모바일 웹 프로토타입이다. React + TypeScript + Vite, MediaPipe Tasks Vision, 자체 WebGL2 렌더러로 구성되며 이미지·랜드마크·마스크는 기본 경로에서 서버로 보내지 않는다.
+사진과 전면 카메라에서 헤어 컬러·아이·립·블러셔를 로컬 합성하는 모바일 웹 프로토타입이다. React + TypeScript + Vite, MediaPipe Tasks Vision, 자체 WebGL2 렌더러로 구성되며 이미지·랜드마크·마스크는 기본 경로에서 서버로 보내지 않는다.
 
 ## 실행
 
@@ -14,6 +14,8 @@ npm run dev
 ```
 
 실제 휴대폰 카메라는 HTTPS secure context와 사용자의 권한 허용이 필요하다. Vite가 표시하는 일반 HTTP LAN 주소는 휴대폰 카메라 검증 주소로 충분하지 않다.
+
+고객 화면에서는 개발용 raw/refined mask, 반복 영상, 진단 패널을 숨긴다. 필요할 때 URL에 `?debug=1`을 붙여 연다.
 
 전체 자동 검증 명령은 다음과 같다.
 
@@ -30,8 +32,9 @@ npm run test:e2e
 - 로컬 고정 모델을 사용하는 FaceLandmarker + Hair Segmenter 단일 worker
 - 한 프레임 처리 중 최신 대기 프레임 하나만 유지하는 bounded scheduler
 - 실제 raw hair confidence, 5×5 joint bilateral refined mask, 포즈 정렬 시간축 결합
+- 브라우저 video 원본과 투명 WebGL 효과 레이어 분리, 최신 얼굴 포즈 기반 hair mask 재투영
 - 선형 sRGB/OKLab 기반 헤어 재질, even-odd 립 마스크, 얼굴 영역 제한 블러셔
-- 6개 실험용 룩, 부위 잠금, 20단계 Undo/Redo, 헤어·립·블러셔 조절
+- 6개 실험용 룩, 부위 잠금, 20단계 Undo/Redo, 헤어 질감 3종·아이섀도/아이라인·립 4재질·블러셔 2배치 조절
 - 원본 홀드, 동일 프레임 라이브 2분할, 사진 4분할
 - 라이브 프레임+recipe revision 동결 후 IMAGE 모드 재분석
 - JPEG/PNG 저장과 다운로드 차단 시 새 이미지 열기
@@ -42,7 +45,7 @@ npm run test:e2e
 
 ## 렌더링 구조
 
-`src/engine/renderer.ts`가 모든 WebGL 자원을 소유한다. source 업로드, hair 경계 보정, 이전 mask 정렬/혼합, 큰 명암 신호, lip coverage, 최종 합성 순서로 실행한다. texture는 크기가 같으면 재사용하고 앱 소유 texture만 계산 장부에 기록한다. 진단의 메모리 값은 브라우저 전체 VRAM 사용량이 아니다.
+`src/engine/renderer.ts`가 모든 WebGL 자원을 소유한다. 라이브 원본 video 위에 투명 효과 canvas를 올리고, source 업로드, hair 경계 보정, 이전 mask 정렬/혼합, 큰 명암 신호, 부위 coverage, 최종 효과 합성 순서로 실행한다. texture는 크기가 같으면 재사용하고 앱 소유 texture만 계산 장부에 기록한다. 진단의 메모리 값은 브라우저 전체 VRAM 사용량이 아니다.
 
 `src/engine/perception.worker.ts`는 두 MediaPipe task를 직렬 실행한다. ES module worker에서 MediaPipe WASM loader가 task별로 다시 실행되도록 고유 loader URL을 만들며, callback mask는 앱 소유 `Uint8Array`로 복사한 뒤 SDK 결과를 닫는다. `generation`이 다른 결과는 표시하지 않고 버퍼를 반환한다.
 
@@ -80,4 +83,4 @@ npm run test:e2e
 
 ## 제외 범위
 
-모델 학습, 서버 추론, 피부/퍼스널컬러 진단·추천, 계정·DB·장기 사진 보관, 분석 SDK, PWA/서비스워커는 만들지 않았다. 원문 구현 기준은 저장소 밖의 `BECON_Prototype_Development_Spec_v1.0.md`다.
+모델 학습, 서버 추론, 헤어스타일 생성, 피부/퍼스널컬러 진단·추천, 계정·DB·장기 사진 보관, 분석 SDK, PWA/서비스워커는 만들지 않았다. 원문 구현 기준은 저장소 밖의 `BECON_Prototype_Development_Spec_v1.0.md`이며 아이 메이크업 확장은 후속 사용자 지시다.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DRAFT_LOOKS, HAIR_COLORS, LIP_COLORS, BLUSH_PALETTES } from '../src/looks/presets';
+import { DRAFT_LOOKS, EYE_COLORS, HAIR_COLORS, LIP_COLORS, BLUSH_PALETTES } from '../src/looks/presets';
 import { HISTORY_LIMIT, applyPreset, beginSliderTransaction, commitRecipe, commitSliderTransaction, createRecipeHistory, patchRegion, redoRecipe, undoRecipe, updateSliderTransaction } from '../src/app/recipe-state';
 
 const base = () => structuredClone(DRAFT_LOOKS[0]);
@@ -11,8 +11,10 @@ describe('draft looks', () => {
     expect(DRAFT_LOOKS.map(({ label }) => label)).toEqual(expect.arrayContaining(['[Experimental · Unapproved] Soft Brown', '[Experimental · Unapproved] Copper Glow', '[Experimental · Unapproved] Rose Brown', '[Experimental · Unapproved] Cool Ash', '[Experimental · Unapproved] Berry Contrast', '[Experimental · Unapproved] Creative Plum']));
     expect(DRAFT_LOOKS.every(({ label }) => /experimental.*unapproved/i.test(label))).toBe(true);
     expect(HAIR_COLORS).toHaveLength(6);
+    expect(EYE_COLORS).toHaveLength(6);
     expect(LIP_COLORS).toHaveLength(8);
     expect(BLUSH_PALETTES).toHaveLength(4);
+    expect(DRAFT_LOOKS.every(({ schemaVersion, eye }) => schemaVersion === 2 && eye.shadowStrength > 0)).toBe(true);
   });
 });
 
@@ -20,8 +22,9 @@ describe('recipe state', () => {
   it('applies only unlocked preset regions without mutating either input', () => {
     const current = base();
     const preset = structuredClone(DRAFT_LOOKS[1]);
-    const result = applyPreset(current, preset, { hair: true, blush: true });
+    const result = applyPreset(current, preset, { hair: true, eye: true, blush: true });
     expect(result.hair).toEqual(current.hair);
+    expect(result.eye).toEqual(current.eye);
     expect(result.blush).toEqual(current.blush);
     expect(result.lip).toEqual(preset.lip);
     result.lip.targetColor = '#000000';

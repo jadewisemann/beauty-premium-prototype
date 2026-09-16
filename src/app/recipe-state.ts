@@ -1,7 +1,7 @@
-import type { BlushRecipe, HairRecipe, LipRecipe, LookRecipe, Region } from '../engine/contracts';
+import type { BlushRecipe, EyeRecipe, HairRecipe, LipRecipe, LookRecipe, Region } from '../engine/contracts';
 
 export type RegionLocks = Partial<Record<Region, boolean>>;
-export type RegionPatch = Partial<HairRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>;
+export type RegionPatch = Partial<HairRecipe> | Partial<EyeRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>;
 
 export interface RecipeHistory {
   past: LookRecipe[];
@@ -24,6 +24,7 @@ export function applyPreset(current: LookRecipe, preset: LookRecipe, locks: Regi
     mode: preset.mode,
     revision: current.revision + 1,
     hair: locks.hair ? clone(current.hair) : clone(preset.hair),
+    eye: locks.eye ? clone(current.eye) : clone(preset.eye),
     lip: locks.lip ? clone(current.lip) : clone(preset.lip),
     blush: locks.blush ? clone(current.blush) : clone(preset.blush),
   };
@@ -31,6 +32,7 @@ export function applyPreset(current: LookRecipe, preset: LookRecipe, locks: Regi
 
 /** Patches exactly one cosmetic region, retaining the rest of the recipe. */
 export function patchRegion(current: LookRecipe, region: 'hair', patch: Partial<HairRecipe>): LookRecipe;
+export function patchRegion(current: LookRecipe, region: 'eye', patch: Partial<EyeRecipe>): LookRecipe;
 export function patchRegion(current: LookRecipe, region: 'lip', patch: Partial<LipRecipe>): LookRecipe;
 export function patchRegion(current: LookRecipe, region: 'blush', patch: Partial<BlushRecipe>): LookRecipe;
 export function patchRegion(current: LookRecipe, region: Region, patch: RegionPatch): LookRecipe {

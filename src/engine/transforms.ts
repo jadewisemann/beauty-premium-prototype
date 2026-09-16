@@ -69,6 +69,11 @@ export function invertMat3(matrix: Mat3): Mat3 {
     F / determinant, G / determinant, H / determinant, I / determinant];
 }
 
+/** Maps a point in the current source frame onto the same face-local point in a reference frame. */
+export function createCurrentToReferenceTransform(currentSourceToFace: Mat3, referenceSourceToFace: Mat3): Mat3 {
+  return multiplyMat3(invertMat3(referenceSourceToFace), currentSourceToFace);
+}
+
 /** UV rotation used only while normalising an input before it becomes source S. */
 export function rotateSourceUv(clockwiseDegrees: 0 | 90 | 180 | 270): Mat3 {
   switch (clockwiseDegrees) {

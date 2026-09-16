@@ -21,4 +21,16 @@ describe('mask geometry', () => {
     expect(result[1].center).toEqual({ x: 0.65, y: 0.55 });
     expect(Number.isFinite(result[0].radiusX)).toBe(true);
   });
+
+  it('moves lifted blush up and out from the apple placement', () => {
+    const landmarks = new Float32Array(478 * 3);
+    landmarks[50 * 3] = 0.35; landmarks[50 * 3 + 1] = 0.55;
+    landmarks[280 * 3] = 0.65; landmarks[280 * 3 + 1] = 0.55;
+    landmarks[1 * 3] = 0.5; landmarks[1 * 3 + 1] = 0.48;
+    const apple = blushEllipses(landmarks, 0.58, 'apple');
+    const lifted = blushEllipses(landmarks, 0.58, 'lifted');
+    expect(lifted[0].center.y).toBeLessThan(apple[0].center.y);
+    expect(lifted[0].center.x).toBeLessThan(apple[0].center.x);
+    expect(lifted[1].center.x).toBeGreaterThan(apple[1].center.x);
+  });
 });

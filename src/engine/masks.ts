@@ -4,6 +4,9 @@ export interface MaskPoint { x: number; y: number }
 export interface MaskConnection { start: number; end: number }
 export interface BlushEllipse { center: MaskPoint; radiusX: number; radiusY: number; rotation: number }
 
+const LEFT_EYE_UPPER = [263, 466, 388, 387, 386, 385, 384, 398, 362] as const;
+const RIGHT_EYE_UPPER = [33, 246, 161, 160, 159, 158, 157, 173, 133] as const;
+
 const point = (landmarks: readonly MaskPoint[] | ArrayLike<number>, index: number): MaskPoint => {
   const value = landmarks[index] as MaskPoint | number | undefined;
   return typeof value === 'object' && value !== null ? value : { x: Number(landmarks[index * 3]) || 0, y: Number(landmarks[index * 3 + 1]) || 0 };
@@ -46,7 +49,42 @@ export function drawLipMask(ctx: { beginPath(): void; moveTo(x: number, y: numbe
   try { ctx.fill('evenodd'); } catch { ctx.fill(); }
 }
 
-export function blushEllipses(landmarks: readonly MaskPoint[] | ArrayLike<number>, size = 0.58): [BlushEllipse, BlushEllipse] {
+/** Encodes soft upper-lid shadow in red and eyeliner in green. */
+export function drawEyeMakeupMask(ctx: CanvasRenderingContext2D, landmarks: readonly MaskPoint[] | ArrayLike<number>): void {
+  const draw = (indices: readonly number[]) => {
+    ctx.beginPath();
+    indices.forEach((index, offset) => {
+      const p = point(landmarks, index);
+      if (offset === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+  };
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.translate(0, -0.012);
+  ctx.filter = 'blur(7px)';
+  ctx.strokeStyle = '#ff0000';
+  ctx.globalAlpha = 0.72;
+  ctx.lineWidth = 0.032;
+  draw(LEFT_EYE_UPPER);
+  draw(RIGHT_EYE_UPPER);
+  ctx.restore();
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = '#00ff00';
+  ctx.lineWidth = 0.006;
+  draw(LEFT_EYE_UPPER);
+  draw(RIGHT_EYE_UPPER);
+  ctx.restore();
+}
+
+export function blushEllipses(landmarks: readonly MaskPoint[] | ArrayLike<number>, size = 0.58, placement: 'apple' | 'lifted' = 'apple'): [BlushEllipse, BlushEllipse] {
   const available = Array.isArray(landmarks) ? landmarks.length : Math.floor(landmarks.length / 3);
   if (available < 281) {
     const radiusX = 0.16 * Math.max(0.1, size);
@@ -61,10 +99,13 @@ export function blushEllipses(landmarks: readonly MaskPoint[] | ArrayLike<number
   const span = Math.max(0.02, Math.abs(right.x - left.x));
   const radiusX = finite(span * 0.16 * Math.max(0.1, size), 0.04);
   const radiusY = radiusX * 0.62;
-  const y = finite((left.y + right.y) / 2 + Math.abs(nose.y - (left.y + right.y) / 2) * 0.1, 0.55);
+  const baseY = finite((left.y + right.y) / 2 + Math.abs(nose.y - (left.y + right.y) / 2) * 0.1, 0.55);
+  const lift = placement === 'lifted' ? span * 0.08 : 0;
+  const spread = placement === 'lifted' ? span * 0.04 : 0;
+  const angle = finite(Math.atan2(right.y - left.y, right.x - left.x), 0);
   return [
-    { center: { x: finite(left.x, 0.35), y }, radiusX, radiusY, rotation: 0 },
-    { center: { x: finite(right.x, 0.65), y }, radiusX, radiusY, rotation: 0 },
+    { center: { x: finite(left.x - spread, 0.35), y: baseY - lift }, radiusX, radiusY, rotation: angle },
+    { center: { x: finite(right.x + spread, 0.65), y: baseY - lift }, radiusX, radiusY, rotation: angle },
   ];
 }
 

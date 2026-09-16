@@ -5,7 +5,7 @@ const fixture = path.resolve('tests/fixtures/face_model.png');
 
 test('analyzes a real photo, edits, compares, and exports', async ({ page }) => {
   test.setTimeout(120_000);
-  await page.goto('/');
+  await page.goto('/?debug=1');
   await expect(page.locator('.state-pill')).toHaveText(/준비됨|오류/, { timeout: 45_000 });
   if (await page.locator('.state-pill').innerText() === '오류') throw new Error(await page.getByRole('alert').innerText());
 

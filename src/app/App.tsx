@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { DiagnosticsPanel } from '../debug/DiagnosticsPanel';
 import { BeautyController } from '../engine/controller';
-import type { BlushRecipe, HairRecipe, LipRecipe, LookRecipe, Region } from '../engine/contracts';
+import type { BlushRecipe, EyeRecipe, HairRecipe, LipRecipe, LookRecipe, Region } from '../engine/contracts';
 import { downloadBlob, exportCanvas } from '../engine/export';
 import type { RenderView, RendererMetrics } from '../engine/renderer';
-import { BLUSH_PALETTES, DRAFT_LOOKS, HAIR_COLORS, LIP_COLORS } from '../looks/presets';
+import { BLUSH_PALETTES, DRAFT_LOOKS, EYE_COLORS, HAIR_COLORS, LIP_COLORS } from '../looks/presets';
 import {
   applyPreset,
   beginSliderTransaction,
@@ -45,6 +45,7 @@ export function App() {
   const [savedUrl, setSavedUrl] = useState<string | null>(null);
   const [cameraConsentGiven, setCameraConsentGiven] = useState(false);
   const [cameraLaunchPending, setCameraLaunchPending] = useState(false);
+  const [debugEnabled] = useState(() => new URLSearchParams(window.location.search).get('debug') === '1');
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const recipe = history.present;
@@ -57,18 +58,18 @@ export function App() {
 
   useEffect(() => {
     void controller.initialize();
-    const interval = window.setInterval(() => setDiagnostics(controller.diagnostics.snapshot()), 500);
+    const interval = debugEnabled ? window.setInterval(() => setDiagnostics(controller.diagnostics.snapshot()), 500) : null;
     const visibility = () => controller.setVisibility(!document.hidden);
     const releaseOriginal = () => setOriginalHeld(false);
     document.addEventListener('visibilitychange', visibility);
     window.addEventListener('blur', releaseOriginal);
     return () => {
-      window.clearInterval(interval);
+      if (interval !== null) window.clearInterval(interval);
       document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('blur', releaseOriginal);
       controller.dispose();
     };
-  }, [controller]);
+  }, [controller, debugEnabled]);
 
   useEffect(() => () => { if (savedUrl) URL.revokeObjectURL(savedUrl); }, [savedUrl]);
 
@@ -105,10 +106,10 @@ export function App() {
   };
 
   const selectPreset = (preset: LookRecipe) => setHistory((current) => commitRecipe(current, applyPreset(current.present, preset, locks)));
-  const patch = (region: Region, values: Partial<HairRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>) => {
+  const patch = (region: Region, values: Partial<HairRecipe> | Partial<EyeRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>) => {
     setHistory((current) => commitRecipe(current, patchRecipe(current.present, region, values)));
   };
-  const updateSlider = (region: Region, values: Partial<HairRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>) => {
+  const updateSlider = (region: Region, values: Partial<HairRecipe> | Partial<EyeRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>) => {
     setHistory((current) => updateSliderTransaction(current, patchRecipe(current.present, region, values)));
   };
 
@@ -143,7 +144,13 @@ export function App() {
       </header>
 
       <section className={`stage-card ${compare === 'grid' && snapshot.state === 'PHOTO' ? 'stage-grid' : ''}`}>
-        <video ref={videoRef} className="source-video" muted playsInline aria-hidden="true" />
+        <video
+          ref={videoRef}
+          className={`source-video ${snapshot.sourceKind === 'camera' || snapshot.sourceKind === 'replay' ? 'source-video-visible' : ''} ${snapshot.sourceKind === 'camera' ? 'source-video-mirrored' : ''}`}
+          muted
+          playsInline
+          aria-hidden="true"
+        />
         {compare === 'grid' && snapshot.state === 'PHOTO' ? (
           DRAFT_LOOKS.slice(0, 4).map((look) => (
             <div className="grid-look" key={look.id}>
@@ -198,7 +205,7 @@ export function App() {
                 <div className="entry-copy">
                   <span className="entry-kicker">STEP 1 · 카메라 사용 안내</span>
                   <h2 id="entry-title">전면 카메라로 얼굴을 비춰도 될까요?</h2>
-                  <p>헤어·립·블러셔 효과를 실시간으로 보여주기 위해 카메라를 사용합니다.</p>
+                  <p>헤어 컬러·아이·립·블러셔 효과를 실시간으로 보여주기 위해 카메라를 사용합니다.</p>
                   <div className="privacy-note"><strong>기기 안에서만 처리해요</strong><span>얼굴 이미지와 분석 결과를 서버로 전송하거나 저장하지 않습니다.</span></div>
                   <div className="entry-actions">
                     <button className="primary-button" type="button" disabled={unavailableError} onClick={requestCamera}>동의하고 카메라 켜기</button>
@@ -219,10 +226,10 @@ export function App() {
       </section>
 
       {snapshot.sourceKind && <>
-        <section className="source-controls" aria-label="입력 선택">
+        <section className={`source-controls ${debugEnabled ? '' : 'source-controls-customer'}`} aria-label="입력 선택">
           <button className="primary-button" type="button" disabled={!ready || snapshot.state === 'LOADING_MODELS'} onClick={requestCamera}>카메라</button>
           <label className="secondary-button file-button">사진<input type="file" accept="image/jpeg,image/png,image/webp" onChange={choosePhoto} disabled={!ready} /></label>
-          <label className="text-button file-button">반복 영상<input type="file" accept="video/*" onChange={chooseReplay} disabled={!ready} /></label>
+          {debugEnabled && <label className="text-button file-button">반복 영상<input type="file" accept="video/*" onChange={chooseReplay} disabled={!ready} /></label>}
         </section>
 
         <section className="quick-actions" aria-label="비교 및 촬영">
@@ -232,17 +239,18 @@ export function App() {
           <button type="button" disabled={!isLive} onClick={() => videoRef.current && void controller.captureFrame(videoRef.current, recipe.revision)}>촬영</button>
         </section>
 
-        <nav className="view-switcher" aria-label="개발 보기">
+        {debugEnabled && <nav className="view-switcher" aria-label="개발 보기">
           {viewOptions.map((option) => <button key={option.id} type="button" className={view === option.id ? 'active' : ''} onClick={() => setView(option.id)}>{option.label}</button>)}
-        </nav>
+        </nav>}
 
         <nav className="beauty-tabs" aria-label="효과 편집">
-          {(['looks', 'hair', 'lip', 'blush'] as const).map((item) => <button key={item} type="button" className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{tabLabel(item)}</button>)}
+          {(['looks', 'hair', 'eye', 'lip', 'blush'] as const).map((item) => <button key={item} type="button" className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{tabLabel(item)}</button>)}
         </nav>
 
         <section className="editor-card">
           {tab === 'looks' && <LookEditor recipe={recipe} locks={locks} onLock={(region) => setLocks((current) => ({ ...current, [region]: !current[region] }))} onSelect={selectPreset} />}
           {tab === 'hair' && <RegionEditor region="hair" recipe={recipe} colors={HAIR_COLORS} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
+          {tab === 'eye' && <RegionEditor region="eye" recipe={recipe} colors={EYE_COLORS} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
           {tab === 'lip' && <RegionEditor region="lip" recipe={recipe} colors={LIP_COLORS} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
           {tab === 'blush' && <RegionEditor region="blush" recipe={recipe} colors={BLUSH_PALETTES.flat()} onPatch={patch} onSliderStart={() => setHistory(beginSliderTransaction)} onSlider={updateSlider} onSliderEnd={() => setHistory(commitSliderTransaction)} />}
           <div className="history-actions"><button type="button" disabled={!history.past.length} onClick={() => setHistory(undoRecipe)}>실행 취소</button><button type="button" disabled={!history.future.length} onClick={() => setHistory(redoRecipe)}>다시 실행</button></div>
@@ -266,7 +274,7 @@ export function App() {
         </section>
       )}
 
-      {snapshot.sourceKind && <DiagnosticsPanel controller={snapshot} diagnostics={diagnostics} onDownload={() => controller.diagnostics.download()} />}
+      {debugEnabled && snapshot.sourceKind && <DiagnosticsPanel controller={snapshot} diagnostics={diagnostics} onDownload={() => controller.diagnostics.download()} />}
     </main>
   );
 }
@@ -275,7 +283,7 @@ function LookEditor({ recipe, locks, onLock, onSelect }: { recipe: LookRecipe; l
   return <>
     <div className="look-grid">{DRAFT_LOOKS.map((look) => <button key={look.id} type="button" className={recipe.id === look.id ? 'selected' : ''} onClick={() => onSelect(look)}><span style={{ background: look.hair.targetColor }} />{shortLabel(look.label)}<small>{look.mode === 'expressive' ? '표현' : '내추럴'}</small></button>)}</div>
     <p className="draft-note">초기 룩은 실험용이며 퍼스널컬러 진단이나 승인된 추천값이 아닙니다.</p>
-    <div className="lock-row">{(['hair', 'lip', 'blush'] as const).map((region) => <button key={region} type="button" className={locks[region] ? 'active' : ''} onClick={() => onLock(region)}>{locks[region] ? '🔒' : '🔓'} {tabLabel(region)}</button>)}</div>
+    <div className="lock-row">{(['hair', 'eye', 'lip', 'blush'] as const).map((region) => <button key={region} type="button" className={locks[region] ? 'active' : ''} onClick={() => onLock(region)}>{locks[region] ? '🔒' : '🔓'} {tabLabel(region)}</button>)}</div>
   </>;
 }
 
@@ -283,19 +291,28 @@ function RegionEditor({ region, recipe, colors, onPatch, onSliderStart, onSlider
   region: Region;
   recipe: LookRecipe;
   colors: readonly string[];
-  onPatch(region: Region, values: Partial<HairRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>): void;
+  onPatch(region: Region, values: Partial<HairRecipe> | Partial<EyeRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>): void;
   onSliderStart(): void;
-  onSlider(region: Region, values: Partial<HairRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>): void;
+  onSlider(region: Region, values: Partial<HairRecipe> | Partial<EyeRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>): void;
   onSliderEnd(): void;
 }) {
   const value = recipe[region];
+  const strength = region === 'eye' ? 0 : recipe[region].strength;
   return <>
     <div className="region-heading"><strong>{tabLabel(region)}</strong><label className="toggle"><input type="checkbox" checked={value.enabled} onChange={(event) => onPatch(region, { enabled: event.target.checked })} /><span /></label></div>
     <div className="swatches">{colors.map((color) => <button key={color} type="button" aria-label={`${tabLabel(region)} ${color}`} className={value.targetColor === color ? 'selected' : ''} style={{ background: color }} onClick={() => onPatch(region, { targetColor: color })} />)}</div>
-    <Slider label="강도" value={value.strength} min={0} max={1} step={0.01} onStart={onSliderStart} onChange={(next) => onSlider(region, { strength: next })} onEnd={onSliderEnd} />
+    {region === 'eye' ? <>
+      <Slider label="아이섀도" value={recipe.eye.shadowStrength} min={0} max={0.65} step={0.01} onStart={onSliderStart} onChange={(next) => onSlider('eye', { shadowStrength: next })} onEnd={onSliderEnd} />
+      <Slider label="아이라인" value={recipe.eye.linerStrength} min={0} max={0.8} step={0.01} onStart={onSliderStart} onChange={(next) => onSlider('eye', { linerStrength: next })} onEnd={onSliderEnd} />
+    </> : <Slider label="강도" value={strength} min={0} max={1} step={0.01} onStart={onSliderStart} onChange={(next) => onSlider(region, { strength: next })} onEnd={onSliderEnd} />}
     {region === 'hair' && <><Slider label="밝기" value={recipe.hair.liftStops} min={-0.3} max={recipe.mode === 'expressive' ? 1.5 : 0.8} step={0.05} onStart={onSliderStart} onChange={(next) => onSlider('hair', { liftStops: next })} onEnd={onSliderEnd} /><Slider label="색감" value={recipe.hair.chromaMix} min={0} max={1} step={0.01} onStart={onSliderStart} onChange={(next) => onSlider('hair', { chromaMix: next })} onEnd={onSliderEnd} /></>}
-    {region === 'lip' && <div className="material-row"><button className={recipe.lip.material === 'tint' ? 'active' : ''} onClick={() => onPatch('lip', { material: 'tint' })}>틴트</button><button className={recipe.lip.material === 'satin' ? 'active' : ''} onClick={() => onPatch('lip', { material: 'satin' })}>새틴</button></div>}
-    {region === 'blush' && <Slider label="크기" value={recipe.blush.size} min={0.2} max={1} step={0.01} onStart={onSliderStart} onChange={(next) => onSlider('blush', { size: next })} onEnd={onSliderEnd} />}
+    {region === 'hair' && <><div className="material-row">{([
+      ['natural', '내추럴', { detailKeep: 0.7, highlightProtect: 0.55, edgeStrength: 0.45 }],
+      ['soft', '소프트', { detailKeep: 0.5, highlightProtect: 0.72, edgeStrength: 0.34 }],
+      ['shine', '샤인', { detailKeep: 0.84, highlightProtect: 0.36, edgeStrength: 0.52 }],
+    ] as const).map(([finish, label, values]) => <button key={finish} className={hairFinish(recipe.hair) === finish ? 'active' : ''} onClick={() => onPatch('hair', values)}>{label}</button>)}</div><p className="draft-note">현재는 헤어 컬러·톤 체험입니다. 컷·웨이브 변경은 전용 스타일 자산이 필요합니다.</p></>}
+    {region === 'lip' && <div className="material-row">{(['tint', 'satin', 'matte', 'gloss'] as const).map((material) => <button key={material} className={recipe.lip.material === material ? 'active' : ''} onClick={() => onPatch('lip', { material })}>{({ tint: '틴트', satin: '새틴', matte: '매트', gloss: '글로스' })[material]}</button>)}</div>}
+    {region === 'blush' && <><Slider label="크기" value={recipe.blush.size} min={0.2} max={1} step={0.01} onStart={onSliderStart} onChange={(next) => onSlider('blush', { size: next })} onEnd={onSliderEnd} /><div className="material-row"><button className={recipe.blush.placement === 'apple' ? 'active' : ''} onClick={() => onPatch('blush', { placement: 'apple' })}>애플존</button><button className={recipe.blush.placement === 'lifted' ? 'active' : ''} onClick={() => onPatch('blush', { placement: 'lifted' })}>리프팅</button></div></>}
   </>;
 }
 
@@ -303,14 +320,20 @@ function Slider({ label, value, min, max, step, onStart, onChange, onEnd }: { la
   return <label className="slider-row"><span>{label}<output>{value.toFixed(2)}</output></span><input type="range" value={value} min={min} max={max} step={step} onFocus={onStart} onPointerDown={onStart} onKeyDown={onStart} onChange={(event) => onChange(Number(event.target.value))} onKeyUp={onEnd} onPointerUp={onEnd} onPointerCancel={onEnd} onBlur={onEnd} /></label>;
 }
 
-function patchRecipe(recipe: LookRecipe, region: Region, values: Partial<HairRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>): LookRecipe {
+function patchRecipe(recipe: LookRecipe, region: Region, values: Partial<HairRecipe> | Partial<EyeRecipe> | Partial<LipRecipe> | Partial<BlushRecipe>): LookRecipe {
   if (region === 'hair') return patchRegion(recipe, 'hair', values as Partial<HairRecipe>);
+  if (region === 'eye') return patchRegion(recipe, 'eye', values as Partial<EyeRecipe>);
   if (region === 'lip') return patchRegion(recipe, 'lip', values as Partial<LipRecipe>);
   return patchRegion(recipe, 'blush', values as Partial<BlushRecipe>);
 }
 
-function tabLabel(tab: Tab): string { return { looks: '완성 룩', hair: '헤어', lip: '립', blush: '블러셔' }[tab]; }
+function tabLabel(tab: Tab): string { return { looks: '완성 룩', hair: '헤어 컬러', eye: '아이', lip: '립', blush: '블러셔' }[tab]; }
 function shortLabel(label: string): string { return label.replace('[Experimental · Unapproved] ', ''); }
+function hairFinish(hair: HairRecipe): 'natural' | 'soft' | 'shine' {
+  if (hair.detailKeep < 0.6) return 'soft';
+  if (hair.detailKeep > 0.78) return 'shine';
+  return 'natural';
+}
 function nextPaint(): Promise<void> { return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))); }
 function stateLabel(state: string): string {
   const labels: Record<string, string> = { IDLE: '대기', LOADING_MODELS: '모델 로딩', READY: '준비됨', REQUESTING_CAMERA: '카메라 요청', DECODING_PHOTO: '입력 해독', ANALYZING_PHOTO: '사진 분석', LIVE: '라이브', PHOTO: '사진', FREEZING: '촬영 중', EXPORTING: '저장 중', ERROR: '오류', PAUSED: '일시 정지', DISPOSING: '정리 중', SWITCHING_SOURCE: '입력 전환' };

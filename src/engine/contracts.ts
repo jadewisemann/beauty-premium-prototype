@@ -1,5 +1,5 @@
 /** Shared engine contracts. Source coordinates are upright, unmirrored UVs. */
-export type Region = 'hair' | 'lip' | 'blush';
+export type Region = 'hair' | 'eye' | 'lip' | 'blush';
 export type SourceKind = 'camera' | 'photo' | 'replay';
 
 /** A row-major homogeneous 2D transform. */
@@ -57,9 +57,16 @@ export interface HairRecipe {
 
 export interface LipRecipe {
   enabled: boolean;
-  material: 'tint' | 'satin';
+  material: 'tint' | 'satin' | 'matte' | 'gloss';
   targetColor: string;
   strength: number;
+}
+
+export interface EyeRecipe {
+  enabled: boolean;
+  targetColor: string;
+  shadowStrength: number;
+  linerStrength: number;
 }
 
 export interface BlushRecipe {
@@ -67,15 +74,17 @@ export interface BlushRecipe {
   targetColor: string;
   strength: number;
   size: number;
+  placement: 'apple' | 'lifted';
 }
 
 export interface LookRecipe {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   revision: number;
   label: string;
   mode: 'natural' | 'expressive';
   hair: HairRecipe;
+  eye: EyeRecipe;
   lip: LipRecipe;
   blush: BlushRecipe;
 }
