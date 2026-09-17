@@ -2,14 +2,12 @@ import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import { OpenMakeup, type MakeupEngine } from 'open-makeup-sdk';
 // @ts-expect-error OpenMakeupSDK's three peer ships without TypeScript declarations.
-import { CanvasTexture, Color, Mesh, ShaderMaterial, Vector2, type Scene } from 'three';
-import { paintHairMask } from './hair-color';
+import { CanvasTexture, Color, Mesh, ShaderMaterial, type Scene } from 'three';
 import { applyOpenMakeup, type MakeupEngineInternals, type MakeupState } from './open-makeup';
 
 const ASSETS_URL = 'https://cdn.jsdelivr.net/npm/open-makeup-sdk@0.1.0/assets';
 const MEDIAPIPE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619';
 const HAIR_INPUT_SIZE = 512;
-const HAIR_FRAME_INTERVAL_MS = 33;
 
 interface EngineInternals extends MakeupEngine, MakeupEngineInternals {
   _CameraClass: typeof ExistingVideoCamera;
@@ -99,21 +97,16 @@ function addHairColor(
   callbacks: RefObject<{ onReady(ready: boolean): void; onHairReady(ready: boolean): void; onError(message: string): void }>,
   cancelled: () => boolean,
 ): () => void {
-  const input = document.createElement('canvas');
   const maskCanvas = document.createElement('canvas');
-  const inputContext = input.getContext('2d');
+  maskCanvas.width = maskCanvas.height = HAIR_INPUT_SIZE;
   const maskContext = maskCanvas.getContext('2d');
-  if (!inputContext || !maskContext) throw new Error('헤어: canvas를 만들 수 없습니다.');
-  const initialScale = Math.min(1, HAIR_INPUT_SIZE / Math.max(video.videoWidth, video.videoHeight));
-  input.width = maskCanvas.width = Math.max(1, Math.round(video.videoWidth * initialScale));
-  input.height = maskCanvas.height = Math.max(1, Math.round(video.videoHeight * initialScale));
+  if (!maskContext) throw new Error('헤어: canvas를 만들 수 없습니다.');
 
   const texture = new CanvasTexture(maskCanvas);
   const material = new ShaderMaterial({
     uniforms: {
       uSource: { value: engine.videoTexture },
       uMask: { value: texture },
-      uMaskTexel: { value: new Vector2(1 / maskCanvas.width, 1 / maskCanvas.height) },
       uTarget: { value: new Color(hair.current.color) },
       uStrength: { value: hair.current.strength },
     },
@@ -121,7 +114,6 @@ function addHairColor(
     fragmentShader: `
       uniform sampler2D uSource;
       uniform sampler2D uMask;
-      uniform vec2 uMaskTexel;
       uniform vec3 uTarget;
       uniform float uStrength;
       varying vec2 vUv;
@@ -138,26 +130,8 @@ function addHairColor(
         return dot(color, vec3(0.2126, 0.7152, 0.0722));
       }
 
-      float refinedMask(vec2 uv) {
-        float centerLuma = luma(toLinear(texture2D(uSource, uv).rgb));
-        float weightedMask = 0.0;
-        float totalWeight = 0.0;
-        for (int y = -2; y <= 2; y++) {
-          for (int x = -2; x <= 2; x++) {
-            vec2 offset = vec2(float(x), float(y)) * uMaskTexel;
-            vec2 sampleUv = clamp(uv + offset, vec2(0.0), vec2(1.0));
-            float distanceWeight = exp(-float(x * x + y * y) * 0.25);
-            float edgeWeight = exp(-abs(luma(toLinear(texture2D(uSource, sampleUv).rgb)) - centerLuma) * 18.0);
-            float weight = distanceWeight * edgeWeight;
-            weightedMask += texture2D(uMask, sampleUv).r * weight;
-            totalWeight += weight;
-          }
-        }
-        return weightedMask / max(totalWeight, 0.0001);
-      }
-
       void main() {
-        float mask = smoothstep(0.30, 0.72, refinedMask(vUv));
+        float mask = smoothstep(0.30, 0.72, texture2D(uMask, vUv).r);
         if (mask < 0.01) discard;
         vec3 source = texture2D(uSource, vUv).rgb;
         vec3 sourceLinear = toLinear(source);
@@ -183,49 +157,52 @@ function addHairColor(
 
   let frame = 0;
   let busy = false;
-  let lastRun = 0;
-  let imageData = maskContext.createImageData(maskCanvas.width, maskCanvas.height);
+  let lastVideoTime = -1;
   let ready = false;
 
   worker.onmessage = ({ data }: MessageEvent<
-    | { type: 'mask'; width: number; height: number; mask: Float32Array }
+    | { type: 'mask'; bitmap: ImageBitmap }
     | { type: 'error'; message: string }
   >) => {
     busy = false;
-    if (cancelled()) return;
-    if (data.type === 'error') return callbacks.current.onError(`헤어: ${data.message}`);
-    if (maskCanvas.width !== data.width || maskCanvas.height !== data.height) {
-      maskCanvas.width = data.width;
-      maskCanvas.height = data.height;
-      imageData = maskContext.createImageData(data.width, data.height);
-      material.uniforms.uMaskTexel.value.set(1 / data.width, 1 / data.height);
+    if (cancelled()) {
+      if (data.type === 'mask') data.bitmap.close();
+      return;
     }
-    paintHairMask(data.mask, imageData.data);
-    maskContext.putImageData(imageData, 0, 0);
+    if (data.type === 'error') {
+      busy = true;
+      return callbacks.current.onError(`헤어: ${data.message}`);
+    }
+    if (maskCanvas.width !== data.bitmap.width || maskCanvas.height !== data.bitmap.height) {
+      texture.dispose();
+      maskCanvas.width = data.bitmap.width;
+      maskCanvas.height = data.bitmap.height;
+    }
+    maskContext.drawImage(data.bitmap, 0, 0);
+    data.bitmap.close();
     texture.needsUpdate = true;
-    material.uniforms.uTarget.value.set(hair.current.color);
-    material.uniforms.uStrength.value = hair.current.strength;
     if (!ready) {
       ready = true;
       callbacks.current.onHairReady(true);
     }
   };
+  worker.onerror = event => {
+    busy = true;
+    callbacks.current.onError(`헤어: ${event.message || 'GPU worker 실행 실패'}`);
+  };
 
   const draw = (now: number) => {
     if (cancelled()) return;
+    material.uniforms.uTarget.value.set(hair.current.color);
+    material.uniforms.uStrength.value = hair.current.strength;
     if (plane.geometry !== engine.videoPlane.geometry) plane.geometry = engine.videoPlane.geometry;
-    if (!busy && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && now - lastRun >= HAIR_FRAME_INTERVAL_MS) {
+    if (!busy && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.currentTime !== lastVideoTime) {
       const scale = Math.min(1, HAIR_INPUT_SIZE / Math.max(video.videoWidth, video.videoHeight));
       const width = Math.max(1, Math.round(video.videoWidth * scale));
       const height = Math.max(1, Math.round(video.videoHeight * scale));
-      if (input.width !== width || input.height !== height) {
-        input.width = width;
-        input.height = height;
-      }
-      inputContext.drawImage(video, 0, 0, width, height);
-      lastRun = now;
+      lastVideoTime = video.currentTime;
       busy = true;
-      void createImageBitmap(input).then((bitmap) => {
+      void createImageBitmap(video, { resizeWidth: width, resizeHeight: height }).then((bitmap) => {
         if (cancelled()) return bitmap.close();
         worker.postMessage({ bitmap, timestamp: Math.ceil(now) }, [bitmap]);
       }).catch((error) => {
