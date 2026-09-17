@@ -2,15 +2,22 @@ import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import { OpenMakeup, type MakeupEngine } from 'open-makeup-sdk';
 // @ts-expect-error OpenMakeupSDK's three peer ships without TypeScript declarations.
-import { CanvasTexture, Color, Mesh, ShaderMaterial, type Scene } from 'three';
+import { CanvasTexture, Color, Mesh, ShaderMaterial, type Camera, type Scene, type WebGLRenderer } from 'three';
 import { applyOpenMakeup, type MakeupEngineInternals, type MakeupState } from './open-makeup';
 
 const ASSETS_URL = 'https://cdn.jsdelivr.net/npm/open-makeup-sdk@0.1.0/assets';
 const MEDIAPIPE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619';
-const HAIR_INPUT_SIZE = 512;
+const MOBILE = window.matchMedia('(pointer: coarse)').matches;
+const HAIR_INPUT_SIZE = MOBILE ? 384 : 512;
+const HAIR_FRAME_INTERVAL_MS = MOBILE ? 30 : 0;
 
 interface EngineInternals extends MakeupEngine, MakeupEngineInternals {
   _CameraClass: typeof ExistingVideoCamera;
+  _animate: (now?: number) => void;
+  _rafId: number | null;
+  _setupScene: () => void;
+  camera3D: Camera;
+  renderer: WebGLRenderer;
   scene: Scene;
   videoPlane: Mesh;
   videoTexture: unknown;
@@ -47,6 +54,7 @@ export function OpenMakeupViewport({ videoRef, makeup, hair, onReady, onHairRead
     let disposeHair = () => hairWorker.terminate();
     const sdk = new OpenMakeup({ video, renderCanvas: canvas, assetsBaseUrl: ASSETS_URL, mediapipeBaseUrl: MEDIAPIPE_URL });
     const engine = sdk.engine as EngineInternals;
+    if (MOBILE) configureMobileRenderer(engine);
 
     void (async () => {
       try {
@@ -157,6 +165,7 @@ function addHairColor(
 
   let frame = 0;
   let busy = false;
+  let lastRun = 0;
   let lastVideoTime = -1;
   let ready = false;
 
@@ -196,11 +205,12 @@ function addHairColor(
     material.uniforms.uTarget.value.set(hair.current.color);
     material.uniforms.uStrength.value = hair.current.strength;
     if (plane.geometry !== engine.videoPlane.geometry) plane.geometry = engine.videoPlane.geometry;
-    if (!busy && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.currentTime !== lastVideoTime) {
+    if (!busy && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.currentTime !== lastVideoTime && now - lastRun >= HAIR_FRAME_INTERVAL_MS) {
       const scale = Math.min(1, HAIR_INPUT_SIZE / Math.max(video.videoWidth, video.videoHeight));
       const width = Math.max(1, Math.round(video.videoWidth * scale));
       const height = Math.max(1, Math.round(video.videoHeight * scale));
       lastVideoTime = video.currentTime;
+      lastRun = now;
       busy = true;
       void createImageBitmap(video, { resizeWidth: width, resizeHeight: height }).then((bitmap) => {
         if (cancelled()) return bitmap.close();
@@ -220,6 +230,23 @@ function addHairColor(
     material.dispose();
     texture.dispose();
     worker.terminate();
+  };
+}
+
+function configureMobileRenderer(engine: EngineInternals): void {
+  const setupScene = engine._setupScene;
+  engine._setupScene = () => {
+    setupScene.call(engine);
+    const setPixelRatio = engine.renderer.setPixelRatio.bind(engine.renderer);
+    engine.renderer.setPixelRatio = (ratio: number) => setPixelRatio(Math.min(ratio, 1.5));
+  };
+
+  let lastRender = 0;
+  engine._animate = (now = performance.now()) => {
+    engine._rafId = requestAnimationFrame(engine._animate);
+    if (now - lastRender < 30) return;
+    lastRender = now;
+    engine.renderer.render(engine.scene, engine.camera3D);
   };
 }
 
