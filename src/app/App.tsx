@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import type { Finish } from 'open-makeup-sdk';
-import { OpenMakeupViewport } from './OpenMakeupViewport';
-import type { MakeupState } from './open-makeup';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { BeautyController } from '../engine/controller';
+import { MakeupViewport } from './MakeupViewport';
+import type { Finish, MakeupState } from './open-makeup';
 import './styles.css';
 
 type Tab = 'hair' | 'foundation' | 'lipstick' | 'blush' | 'eye';
@@ -24,9 +24,9 @@ const initialMakeup: MakeupState = {
 };
 
 export function App() {
+  const [controller] = useState(() => new BeautyController());
+  const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const [live, setLive] = useState(false);
   const [starting, setStarting] = useState(false);
   const [tab, setTab] = useState<Tab>('hair');
   const [hair, setHair] = useState({ color: COLORS.hair[2] as string, strength: 0.65 });
@@ -34,20 +34,34 @@ export function App() {
   const [hairReady, setHairReady] = useState(false);
   const [makeupReady, setMakeupReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const live = snapshot.state === 'LIVE';
+  const engineReady = snapshot.state === 'READY' || live;
 
-  useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), []);
+  useEffect(() => {
+    void controller.initialize();
+    const onVisibility = () => controller.setVisibility(!document.hidden);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      controller.dispose();
+    };
+  }, [controller]);
+
+  useEffect(() => {
+    if (snapshot.error) setError(snapshot.error.message);
+  }, [snapshot.error]);
 
   const startCamera = async () => {
     if (!videoRef.current || starting) return;
     setStarting(true);
     setError(null);
     try {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-      streamRef.current = stream;
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-      setLive(true);
+      if (snapshot.state === 'ERROR' && ['MODEL_INIT_FAILED', 'WORKER_FAILED', 'TIMEOUT'].includes(snapshot.error?.code ?? '')) {
+        await controller.retry();
+      }
+      if (controller.getSnapshot().state === 'READY' || controller.getSnapshot().state === 'ERROR') {
+        await controller.startCamera(videoRef.current);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -63,11 +77,11 @@ export function App() {
     <header className="glass-surface"><div><small>BECON BEAUTY LAB</small><h1>Beauty Mirror</h1></div><strong data-makeup-ready={makeupReady} data-hair-ready={hairReady}>{live ? (hairReady && makeupReady ? 'LIVE' : '준비 중') : '대기'}</strong></header>
 
     <section className="stage">
-      <video ref={videoRef} className={live ? 'visible' : ''} muted playsInline />
+      <video ref={videoRef} className="visible" muted playsInline />
       {live && <>
-        <OpenMakeupViewport videoRef={videoRef} makeup={makeup} hair={hair} onReady={setMakeupReady} onHairReady={setHairReady} onError={setError} />
+        <MakeupViewport controller={controller} videoRef={videoRef} makeup={makeup} hair={hair} onReady={setMakeupReady} onHairReady={setHairReady} onError={setError} />
       </>}
-      {!live && <div className="entry glass-surface"><small>VIRTUAL BEAUTY STUDIO</small><h2>내 얼굴을 보면서<br />바로 바꿔보세요</h2><p>헤어와 메이크업을 실시간으로 자연스럽게 확인해 보세요.</p><button onClick={() => void startCamera()} disabled={starting}>{starting ? '카메라 여는 중…' : '카메라 시작'}</button></div>}
+      {!live && <div className="entry glass-surface"><small>VIRTUAL BEAUTY STUDIO</small><h2>내 얼굴을 보면서<br />바로 바꿔보세요</h2><p>헤어와 메이크업을 실시간으로 자연스럽게 확인해 보세요.</p><button onClick={() => void startCamera()} disabled={starting || !engineReady}>{starting ? '카메라 여는 중…' : '카메라 시작'}</button></div>}
       {live && (!hairReady || !makeupReady) && <span className="loading">효과 준비 중…</span>}
     </section>
 

@@ -15,6 +15,23 @@ if (packageJson.version !== '1.0.1') throw new Error(`Expected @mediapipe/tasks-
 
 const models = [
   {
+    id: 'face-landmarker',
+    filename: 'face_landmarker.task',
+    sourceUrl: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+    input: 'Image or video frame.',
+    output: 'Face landmarks; blendshapes and facial transformation matrices when enabled.',
+    license: {
+      spdx: 'Apache-2.0',
+      licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
+      modelCards: [
+        { component: 'BlazeFace short-range', url: 'https://storage.googleapis.com/mediapipe-assets/MediaPipe%20BlazeFace%20Model%20Card%20%28Short%20Range%29.pdf' },
+        { component: 'FaceMesh V2', url: 'https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf' },
+        { component: 'Blendshape V2', url: 'https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Blendshape%20V2.pdf' },
+      ],
+      redistributionNotice: 'The FaceLandmarker bundle contains the listed component models. When distributing this bundled asset, retain applicable Apache-2.0 license and notice information.',
+    },
+  },
+  {
     id: 'hair-segmenter',
     filename: 'hair_segmenter.tflite',
     sourceUrl: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/1/hair_segmenter.tflite',

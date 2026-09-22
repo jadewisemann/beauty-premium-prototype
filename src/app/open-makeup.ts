@@ -1,4 +1,6 @@
-import type { Finish, OpenMakeup } from 'open-makeup-sdk';
+import type { LookRecipe } from '../engine/contracts';
+
+export type Finish = 'matte' | 'shimmer' | 'glossy';
 
 export interface MakeupState {
   foundation: { enabled: boolean; color: string; finish: Finish };
@@ -8,24 +10,51 @@ export interface MakeupState {
   eyeline: { enabled: boolean; color: string };
 }
 
-export interface MakeupEngineInternals {
-  blushMat?: { uniforms: { _transparency?: { value: number } } };
-  eyeShadowMat?: { uniforms: { _transparency?: { value: number } } };
-}
-
-type MakeupApi = Pick<OpenMakeup, 'apply' | 'clear'>;
-
-export async function applyOpenMakeup(makeup: MakeupApi, state: MakeupState, engine?: MakeupEngineInternals): Promise<void> {
-  await setLayer(makeup, 'foundation', state.foundation);
-  await setLayer(makeup, 'lipstick', state.lipstick);
-  await setLayer(makeup, 'blush', state.blush);
-  await setLayer(makeup, 'eyeshadow', state.eyeshadow);
-  await setLayer(makeup, 'eyeline', state.eyeline);
-  if (engine?.blushMat?.uniforms._transparency) engine.blushMat.uniforms._transparency.value = 0.7;
-  if (engine?.eyeShadowMat?.uniforms._transparency) engine.eyeShadowMat.uniforms._transparency.value = 0.65;
-}
-
-async function setLayer(makeup: MakeupApi, category: string, layer: { enabled: boolean; color: string; finish?: Finish }): Promise<void> {
-  if (layer.enabled) await makeup.apply(category, { color: layer.color, ...(layer.finish ? { finish: layer.finish } : {}) });
-  else makeup.clear(category);
+export function toLookRecipe(
+  makeup: MakeupState,
+  hair: { color: string; strength: number },
+): LookRecipe {
+  return {
+    schemaVersion: 2,
+    id: 'live',
+    revision: 1,
+    label: 'Live',
+    mode: 'natural',
+    hair: {
+      enabled: hair.strength > 0,
+      targetColor: hair.color,
+      strength: hair.strength,
+      chromaMix: 0.72,
+      liftStops: 0,
+      detailKeep: 0.74,
+      detailLimit: 0.8,
+      highlightProtect: 0.58,
+      edgeStrength: 0.72,
+    },
+    foundation: {
+      enabled: makeup.foundation.enabled,
+      targetColor: makeup.foundation.color,
+      strength: 0.72,
+    },
+    lip: {
+      enabled: makeup.lipstick.enabled,
+      targetColor: makeup.lipstick.color,
+      material: makeup.lipstick.finish === 'glossy' ? 'gloss' : makeup.lipstick.finish === 'shimmer' ? 'satin' : 'matte',
+      strength: 0.82,
+    },
+    blush: {
+      enabled: makeup.blush.enabled,
+      targetColor: makeup.blush.color,
+      strength: 0.7,
+      size: 0.65,
+      placement: 'apple',
+    },
+    eye: {
+      enabled: makeup.eyeshadow.enabled || makeup.eyeline.enabled,
+      targetColor: makeup.eyeshadow.color,
+      linerColor: makeup.eyeline.color,
+      shadowStrength: makeup.eyeshadow.enabled ? 0.65 : 0,
+      linerStrength: makeup.eyeline.enabled ? 0.9 : 0,
+    },
+  };
 }

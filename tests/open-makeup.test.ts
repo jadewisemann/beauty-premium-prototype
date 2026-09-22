@@ -1,8 +1,7 @@
-import { expect, it, vi } from 'vitest';
-import type { Category } from 'open-makeup-sdk';
-import { applyOpenMakeup, type MakeupState } from '../src/app/open-makeup';
+import { expect, it } from 'vitest';
+import { toLookRecipe, type MakeupState } from '../src/app/open-makeup';
 
-it('applies enabled makeup and clears disabled makeup', async () => {
+it('maps UI makeup state to the in-house renderer recipe', () => {
   const state: MakeupState = {
     foundation: { enabled: true, color: '#d9a57f', finish: 'matte' },
     lipstick: { enabled: false, color: '#ce4b62', finish: 'glossy' },
@@ -10,11 +9,12 @@ it('applies enabled makeup and clears disabled makeup', async () => {
     eyeshadow: { enabled: true, color: '#5c382e', finish: 'matte' },
     eyeline: { enabled: false, color: '#1a1110' },
   };
-  const apply = vi.fn(async (category: string) => ({ category: category as Category, color: '', finish: null, pattern: null }));
-  const clear = vi.fn();
+  const recipe = toLookRecipe(state, { color: '#8a4a32', strength: 0.65 });
 
-  await applyOpenMakeup({ apply, clear }, state);
-
-  expect(apply.mock.calls.map(([category]) => category)).toEqual(['foundation', 'blush', 'eyeshadow']);
-  expect(clear.mock.calls.map(([category]) => category)).toEqual(['lipstick', 'eyeline']);
+  expect(recipe.foundation.enabled).toBe(true);
+  expect(recipe.lip.enabled).toBe(false);
+  expect(recipe.blush.enabled).toBe(true);
+  expect(recipe.eye.shadowStrength).toBe(0.65);
+  expect(recipe.eye.linerStrength).toBe(0);
+  expect(recipe.hair.targetColor).toBe('#8a4a32');
 });

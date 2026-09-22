@@ -10,6 +10,15 @@ const copiedWasmDirectory = join(root, 'public', 'vendor', 'mediapipe');
 const manifestPath = join(root, 'public', 'models', 'models.manifest.json');
 const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
 const requiredModels = new Map([
+  ['face-landmarker', {
+    localPath: '/models/face_landmarker.task',
+    sourceUrl: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+    modelCards: [
+      'https://storage.googleapis.com/mediapipe-assets/MediaPipe%20BlazeFace%20Model%20Card%20%28Short%20Range%29.pdf',
+      'https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf',
+      'https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Blendshape%20V2.pdf',
+    ],
+  }],
   ['hair-segmenter', {
     localPath: '/models/hair_segmenter.tflite',
     sourceUrl: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/1/hair_segmenter.tflite',
