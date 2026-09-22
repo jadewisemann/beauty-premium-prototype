@@ -58,42 +58,6 @@ void main() {
 }
 `;
 
-export const luminanceFragmentShader = `#version 300 es
-precision highp float;
-
-in vec2 vUv;
-uniform sampler2D uSource;
-uniform sampler2D uMask;
-uniform vec2 uTexel;
-out vec4 outColor;
-
-vec3 srgbToLinear(vec3 value) {
-  bvec3 cutoff = lessThanEqual(value, vec3(0.04045));
-  vec3 low = value / 12.92;
-  vec3 high = pow((value + 0.055) / 1.055, vec3(2.4));
-  return mix(high, low, cutoff);
-}
-
-void main() {
-  vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
-  float total = 0.0;
-  float weights = 0.0;
-  for (int y = -2; y <= 2; y += 1) {
-    for (int x = -2; x <= 2; x += 1) {
-      vec2 offset = vec2(float(x), float(y)) * uTexel * 3.0;
-      float mask = texture(uMask, uv + offset).r;
-      vec3 linear = srgbToLinear(texture(uSource, uv + offset).rgb);
-      float luminance = max(dot(linear, vec3(0.2126, 0.7152, 0.0722)), 0.003);
-      float weight = 0.08 + mask;
-      total += log2(luminance) * weight;
-      weights += weight;
-    }
-  }
-  float encoded = clamp((total / max(weights, 0.00001) + 12.0) / 16.0, 0.0, 1.0);
-  outColor = vec4(encoded, encoded, encoded, 1.0);
-}
-`;
-
 export const temporalMaskFragmentShader = `#version 300 es
 precision highp float;
 
@@ -123,7 +87,6 @@ in vec2 vUv;
 uniform sampler2D uSource;
 uniform sampler2D uRawMask;
 uniform sampler2D uRefinedMask;
-uniform sampler2D uLargeLuma;
 uniform sampler2D uLipMask;
 uniform sampler2D uEyeMask;
 uniform sampler2D uFoundationMask;
@@ -141,9 +104,6 @@ uniform vec3 uLipTarget;
 uniform vec3 uBlushTarget;
 uniform float uHairStrength;
 uniform float uHairChromaMix;
-uniform float uHairLiftStops;
-uniform float uDetailKeep;
-uniform float uDetailLimit;
 uniform float uHighlightProtect;
 uniform float uEdgeStrength;
 uniform float uHairFreshness;
@@ -258,18 +218,14 @@ void main() {
   float overlayAlpha = 0.0;
   float luminance = max(dot(linear, vec3(0.2126, 0.7152, 0.0722)), 0.003);
   float edge = mix(uEdgeStrength, 1.0, smoothstep(0.4, 0.9, refinedMask));
-  float hairAlpha = clamp(refinedMask * edge * uHairStrength * uHairFreshness, 0.0, 1.0);
+  float visibleTexture = mix(0.55, 1.0, smoothstep(0.01, 0.12, luminance));
+  float highlightProtection = smoothstep(0.55, 0.95, luminance) * uHighlightProtect;
+  float hairAlpha = clamp(refinedMask * edge * uHairStrength * 0.78 * visibleTexture * (1.0 - highlightProtection * 0.5) * uHairFreshness, 0.0, 0.82);
   if (hairAlpha > 0.001) {
-    float logLuminance = log2(luminance);
-    float base = texture(uLargeLuma, hairUv).r * 16.0 - 12.0;
-    float detail = clamp(logLuminance - base, -uDetailLimit, uDetailLimit);
-    float newLogLuminance = base + uHairLiftStops + uDetailKeep * detail;
-    vec3 scaled = linear * (exp2(newLogLuminance) / luminance);
-    vec3 hairLab = linearToOklab(max(scaled, vec3(0.0)));
-    vec3 targetLab = linearToOklab(srgbToLinear(uHairTarget));
-    float highlight = smoothstep(0.55, 1.0, hairLab.x) * uHighlightProtect;
-    hairLab.yz = mix(hairLab.yz, targetLab.yz, uHairChromaMix * (1.0 - highlight));
-    vec3 hairLinear = gamutMap(hairLab);
+    vec3 targetLinear = srgbToLinear(uHairTarget);
+    float targetLuminance = max(dot(targetLinear, vec3(0.2126, 0.7152, 0.0722)), 0.01);
+    vec3 tinted = targetLinear * ((luminance + 0.02) / (targetLuminance + 0.02));
+    vec3 hairLinear = clamp(mix(linear, tinted, uHairChromaMix), 0.0, 1.0);
     overlayPremultiplied = hairLinear * hairAlpha + overlayPremultiplied * (1.0 - hairAlpha);
     overlayAlpha = hairAlpha + overlayAlpha * (1.0 - hairAlpha);
     linear = mix(linear, hairLinear, hairAlpha);

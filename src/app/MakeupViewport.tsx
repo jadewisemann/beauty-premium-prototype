@@ -35,6 +35,12 @@ export function MakeupViewport({ controller, videoRef, makeup, hair, onReady, on
     let previousTrackedFace: FaceSnapshot | null = null;
     let blush: ReturnType<typeof faceGeometry> | null = null;
     let renderer: BeautyRenderer;
+    const sourceCanvas = document.createElement('canvas');
+    const sourceContext = sourceCanvas.getContext('2d', { alpha: false });
+    if (!sourceContext) {
+      onError('카메라 프레임을 처리할 수 없습니다.');
+      return;
+    }
 
     try {
       renderer = new BeautyRenderer(canvas, undefined, () => propsRef.current.onError('WebGL 컨텍스트가 손실되었습니다.'));
@@ -59,9 +65,12 @@ export function MakeupViewport({ controller, videoRef, makeup, hair, onReady, on
         if (canvas.width !== width || canvas.height !== height) {
           canvas.width = width;
           canvas.height = height;
+          sourceCanvas.width = width;
+          sourceCanvas.height = height;
         }
         if (video.currentTime !== lastVideoTime) {
-          renderer.uploadSource(video, video.videoWidth, video.videoHeight);
+          sourceContext.drawImage(video, 0, 0, width, height);
+          renderer.uploadSource(sourceCanvas, width, height);
           lastVideoTime = video.currentTime;
         }
         if (lastHair !== snapshot.hair) {
@@ -102,7 +111,7 @@ export function MakeupViewport({ controller, videoRef, makeup, hair, onReady, on
         renderer.render({
           view: 'final',
           mirror: false,
-          overlayOnly: true,
+          overlayOnly: false,
           recipe: toLookRecipe(propsRef.current.makeup, propsRef.current.hair),
           hairFreshness,
           faceFreshness,

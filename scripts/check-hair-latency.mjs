@@ -125,6 +125,8 @@ try {
   await page.locator('input[type="range"]').fill('0');
   await page.waitForTimeout(300);
   const off = await capture();
+  const visibleSource = off.filter((value, index) => index % 4 !== 3 && value > 8).length / (off.length * 0.75);
+  assert(visibleSource > .2, 'Rendered camera source must not be black');
   if (process.argv[3]) await page.screenshot({ path: process.argv[3].replace('.png', '-off.png') });
   await page.locator('input[type="range"]').fill('1');
   await page.waitForTimeout(300);

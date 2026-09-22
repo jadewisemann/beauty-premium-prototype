@@ -1,5 +1,5 @@
 import type { HairSnapshot, LookRecipe } from './contracts';
-import { compositeFragmentShader, fullscreenVertexShader, luminanceFragmentShader, refineMaskFragmentShader, temporalMaskFragmentShader } from './shaders';
+import { compositeFragmentShader, fullscreenVertexShader, refineMaskFragmentShader, temporalMaskFragmentShader } from './shaders';
 import type { Mat3 } from './contracts';
 import { createCurrentToReferenceTransform, identityMat3, invertMat3, multiplyMat3 } from './transforms';
 
@@ -56,7 +56,6 @@ const LIVE_TEXTURE_BUDGET = 32 * 1024 * 1024;
 export class BeautyRenderer {
   private gl: WebGL2RenderingContext;
   private refineProgram: WebGLProgram;
-  private lumaProgram: WebGLProgram;
   private temporalProgram: WebGLProgram;
   private compositeProgram: WebGLProgram;
   private vao: WebGLVertexArrayObject;
@@ -64,15 +63,11 @@ export class BeautyRenderer {
   private rawMask: TextureResource;
   private refinedMask: TextureResource;
   private stableMasks: [TextureResource, TextureResource];
-  private largeLuma: TextureResource;
   private lipMask: TextureResource;
   private eyeMask: TextureResource;
   private foundationMask: TextureResource;
   private refineFramebuffer: WebGLFramebuffer;
-  private lumaFramebuffer: WebGLFramebuffer;
   private temporalFramebuffer: WebGLFramebuffer;
-  private sourceWidth = 1;
-  private sourceHeight = 1;
   private disposed = false;
   private lost = false;
   private hairDirty = true;
@@ -100,7 +95,6 @@ export class BeautyRenderer {
     if (!gl) throw new Error('WebGL2 is unavailable');
     this.gl = gl;
     this.refineProgram = createProgram(gl, fullscreenVertexShader, refineMaskFragmentShader);
-    this.lumaProgram = createProgram(gl, fullscreenVertexShader, luminanceFragmentShader);
     this.temporalProgram = createProgram(gl, fullscreenVertexShader, temporalMaskFragmentShader);
     this.compositeProgram = createProgram(gl, fullscreenVertexShader, compositeFragmentShader);
     this.vao = must(gl.createVertexArray(), 'vertex array');
@@ -111,12 +105,10 @@ export class BeautyRenderer {
       createTexture(gl, 1, 1, 4, [0, 0, 0, 255]),
       createTexture(gl, 1, 1, 4, [0, 0, 0, 255]),
     ];
-    this.largeLuma = createTexture(gl, 1, 1, 4, [128, 128, 128, 255]);
     this.lipMask = createTexture(gl, 1, 1, 4, [0, 0, 0, 255]);
     this.eyeMask = createTexture(gl, 1, 1, 4, [0, 0, 0, 255]);
     this.foundationMask = createTexture(gl, 1, 1, 4, [0, 0, 0, 255]);
     this.refineFramebuffer = must(gl.createFramebuffer(), 'refine framebuffer');
-    this.lumaFramebuffer = must(gl.createFramebuffer(), 'luminance framebuffer');
     this.temporalFramebuffer = must(gl.createFramebuffer(), 'temporal framebuffer');
     canvas.addEventListener('webglcontextlost', this.handleContextLost);
     canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
@@ -125,8 +117,6 @@ export class BeautyRenderer {
   uploadSource(source: TexImageSource, width: number, height: number): void {
     if (this.disposed || this.lost || width < 1 || height < 1) return;
     const gl = this.gl;
-    this.sourceWidth = width;
-    this.sourceHeight = height;
     gl.bindTexture(gl.TEXTURE_2D, this.source.texture);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
     if (this.source.width === width && this.source.height === height) {
@@ -203,7 +193,6 @@ export class BeautyRenderer {
     this.drawCalls = 0;
     if (this.hairDirty) {
       this.runMaskRefinement();
-      this.runLargeLuminance();
     }
     this.hairDirty = false;
     this.runComposite(options);
@@ -211,7 +200,7 @@ export class BeautyRenderer {
   }
 
   metrics(): RendererMetrics {
-    const textureBytes = [this.source, this.rawMask, this.refinedMask, ...this.stableMasks, this.largeLuma, this.lipMask, this.eyeMask, this.foundationMask]
+    const textureBytes = [this.source, this.rawMask, this.refinedMask, ...this.stableMasks, this.lipMask, this.eyeMask, this.foundationMask]
       .reduce((sum, resource) => sum + resource.width * resource.height * resource.bytesPerPixel, 0);
     return { drawCalls: this.drawCalls, textureBytes, budgetExceeded: textureBytes > LIVE_TEXTURE_BUDGET, contextLosses: this.contextLosses, hairFreshness: 0, faceFreshness: 0 };
   }
@@ -222,13 +211,11 @@ export class BeautyRenderer {
     this.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
     this.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
     const gl = this.gl;
-    [this.source, this.rawMask, this.refinedMask, ...this.stableMasks, this.largeLuma, this.lipMask, this.eyeMask, this.foundationMask].forEach(({ texture }) => gl.deleteTexture(texture));
+    [this.source, this.rawMask, this.refinedMask, ...this.stableMasks, this.lipMask, this.eyeMask, this.foundationMask].forEach(({ texture }) => gl.deleteTexture(texture));
     gl.deleteFramebuffer(this.refineFramebuffer);
-    gl.deleteFramebuffer(this.lumaFramebuffer);
     gl.deleteFramebuffer(this.temporalFramebuffer);
     gl.deleteVertexArray(this.vao);
     gl.deleteProgram(this.refineProgram);
-    gl.deleteProgram(this.lumaProgram);
     gl.deleteProgram(this.temporalProgram);
     gl.deleteProgram(this.compositeProgram);
   }
@@ -277,25 +264,6 @@ export class BeautyRenderer {
     this.hasMaskHistory = true;
   }
 
-  private runLargeLuminance(): void {
-    const gl = this.gl;
-    const scale = Math.min(1, 256 / Math.max(this.sourceWidth, this.sourceHeight));
-    const width = Math.max(1, Math.round(this.sourceWidth * scale));
-    const height = Math.max(1, Math.round(this.sourceHeight * scale));
-    resizeTexture(gl, this.largeLuma, width, height, 4);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.lumaFramebuffer);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.largeLuma.texture, 0);
-    assertFramebuffer(gl, 'large luminance');
-    gl.viewport(0, 0, width, height);
-    gl.useProgram(this.lumaProgram);
-    this.bindCommonGeometry();
-    bindTexture(gl, this.lumaProgram, 'uSource', this.source.texture, 0);
-    bindTexture(gl, this.lumaProgram, 'uMask', this.stableMasks[this.stableIndex].texture, 1);
-    uniform2f(gl, this.lumaProgram, 'uTexel', 1 / width, 1 / height);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-    this.drawCalls += 1;
-  }
-
   private runComposite(options: RenderOptions): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -305,10 +273,9 @@ export class BeautyRenderer {
     bindTexture(gl, this.compositeProgram, 'uSource', this.source.texture, 0);
     bindTexture(gl, this.compositeProgram, 'uRawMask', this.rawMask.texture, 1);
     bindTexture(gl, this.compositeProgram, 'uRefinedMask', this.stableMasks[this.stableIndex].texture, 2);
-    bindTexture(gl, this.compositeProgram, 'uLargeLuma', this.largeLuma.texture, 3);
-    bindTexture(gl, this.compositeProgram, 'uLipMask', this.lipMask.texture, 4);
-    bindTexture(gl, this.compositeProgram, 'uEyeMask', this.eyeMask.texture, 5);
-    bindTexture(gl, this.compositeProgram, 'uFoundationMask', this.foundationMask.texture, 6);
+    bindTexture(gl, this.compositeProgram, 'uLipMask', this.lipMask.texture, 3);
+    bindTexture(gl, this.compositeProgram, 'uEyeMask', this.eyeMask.texture, 4);
+    bindTexture(gl, this.compositeProgram, 'uFoundationMask', this.foundationMask.texture, 5);
     const recipe = options.recipe;
     uniform1i(gl, this.compositeProgram, 'uView', viewIndex(options.view));
     uniform1i(gl, this.compositeProgram, 'uSplitCompare', options.splitCompare ? 1 : 0);
@@ -340,9 +307,6 @@ export class BeautyRenderer {
     uniform3f(gl, this.compositeProgram, 'uBlushTarget', hexToRgb(recipe.blush.targetColor));
     uniform1f(gl, this.compositeProgram, 'uHairStrength', recipe.hair.enabled ? recipe.hair.strength : 0);
     uniform1f(gl, this.compositeProgram, 'uHairChromaMix', recipe.hair.chromaMix);
-    uniform1f(gl, this.compositeProgram, 'uHairLiftStops', recipe.hair.liftStops);
-    uniform1f(gl, this.compositeProgram, 'uDetailKeep', recipe.hair.detailKeep);
-    uniform1f(gl, this.compositeProgram, 'uDetailLimit', recipe.hair.detailLimit);
     uniform1f(gl, this.compositeProgram, 'uHighlightProtect', recipe.hair.highlightProtect);
     uniform1f(gl, this.compositeProgram, 'uEdgeStrength', recipe.hair.edgeStrength);
     uniform1f(gl, this.compositeProgram, 'uHairFreshness', options.hairFreshness);

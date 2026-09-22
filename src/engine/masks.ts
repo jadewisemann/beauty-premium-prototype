@@ -65,10 +65,10 @@ export function drawEyeMakeupMask(ctx: CanvasRenderingContext2D, landmarks: read
   ctx.lineJoin = 'round';
   ctx.globalCompositeOperation = 'lighter';
   ctx.translate(0, -0.012);
-  ctx.filter = 'blur(7px)';
+  ctx.filter = 'blur(8px)';
   ctx.strokeStyle = '#ff0000';
-  ctx.globalAlpha = 0.72;
-  ctx.lineWidth = 0.032;
+  ctx.globalAlpha = 0.48;
+  ctx.lineWidth = 0.022;
   draw(LEFT_EYE_UPPER);
   draw(RIGHT_EYE_UPPER);
   ctx.restore();
@@ -78,7 +78,8 @@ export function drawEyeMakeupMask(ctx: CanvasRenderingContext2D, landmarks: read
   ctx.lineJoin = 'round';
   ctx.globalCompositeOperation = 'lighter';
   ctx.strokeStyle = '#00ff00';
-  ctx.lineWidth = 0.006;
+  ctx.globalAlpha = 0.72;
+  ctx.lineWidth = 0.0035;
   draw(LEFT_EYE_UPPER);
   draw(RIGHT_EYE_UPPER);
   ctx.restore();
